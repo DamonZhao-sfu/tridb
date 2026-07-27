@@ -5,6 +5,11 @@ Drives the **one canonical query** (spec §5) on an identical corpus against
 success metrics (spec §7) per-query and in aggregate, and renders a read-once
 HTML report comparing the two against their targets.
 
+Agent-memory benchmark adapters live in
+[`bench/agent_memory/`](agent_memory/README.md). They provide a scoped
+TriDB/pgvector backend plus official-format retrieval adapters for
+LongMemEval and LoCoMo.
+
 | Metric | Target (spec §7) | Measured on |
 |---|---|---|
 | SM-1 | ≥5× intermediate-result reduction vs. baseline | TriDB vs baseline peak intermediate rows |
