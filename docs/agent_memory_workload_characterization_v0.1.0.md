@@ -1134,6 +1134,17 @@ quality-normalized energy.
 
 ## 16. Implementation gaps and recommended order
 
+> **Superseded in detail by
+> [`agent_memory_reproduction_plan_v0.1.0.md`](agent_memory_reproduction_plan_v0.1.0.md)
+> (2026-07-29).** That document re-verified this list against the working tree
+> after the end-to-end LongMemEval pipeline landed — steps 1–3 below are largely
+> in place for LongMemEval (phase timing, quantiles, and streamed-TTFT
+> measurement all ship in `bench/agent_memory/longmemeval_pipeline.py`), while
+> step 2 remains open for LoCoMo. It carries the current gap register (G0–G12,
+> with severities and blocked paper experiments) and the phased plan. The rest of
+> this document — the paper summary, §9 event schema, §10 metric definitions, and
+> §17 checklist — remains authoritative.
+
 The fastest path from the current repository to a credible characterization is:
 
 1. **Add phase telemetry to `TriDBMemoryBackend`.** Time embedding, transaction,

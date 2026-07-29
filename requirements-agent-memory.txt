@@ -1,0 +1,32 @@
+# Optional extras for the agent-memory benchmark pipelines
+# (bench/agent_memory/longmemeval_pipeline.py, locomo_pipeline.py and
+# tools/fetch_memoryagentbench_longmemeval.py). Not needed for `make test` /
+# `make lint` / CI: the pipelines import these lazily and the unit suite stubs
+# the chunker, the HTTP clients, and the database connection.
+#
+#   pip install -r requirements-agent-memory.txt
+#
+# Extras pattern per advisor plan 058 (requirements-vdbb.txt) and 098
+# (requirements-mcp.txt): pin only the direct extras on top of the core floors.
+# `requests` is a direct import of both pipelines and is already satisfied by
+# requirements.lock (requests==2.34.2); it is listed here so the direct
+# dependency is not invisible.
+-r requirements.txt
+
+# MemoryAgentBench 4,096-token chunking — the paper's construction unit. The
+# pipeline raises "tiktoken is required; install requirements-agent-memory.txt"
+# without it (bench/agent_memory/longmemeval_pipeline.py).
+tiktoken>=0.8
+
+# Sentence segmentation for the same chunker. After install, fetch the models:
+#   python -m nltk.downloader punkt punkt_tab
+nltk>=3.9
+
+# OpenAI-compatible vLLM clients (answer + embedding endpoints) and the
+# Hugging Face fetcher's HTTP layer.
+requests>=2.32
+
+# tools/fetch_memoryagentbench_longmemeval.py — network-gated helper that pulls
+# the five-history ai-hyz/MemoryAgentBench Accurate_Retrieval slice and records
+# the source revision. Version floor matches the module's own error message.
+datasets>=4.5,<5

@@ -1,4 +1,4 @@
-.PHONY: test lint graph-test stock-graph-test stock-crash-test stock-dump-restore-test stock-upgrade-test stock-writer-lock-test stock-release-smoke tjs-parity-test smoke-test test-all baseline-up baseline-down seed bench bench-live sweep sm2 fetch-dataset bench-public bench-repro fetch-hotpot graphrag graphrag-live bench-filtered ablation recall-decay tjs-open-ref tjs-open-live graphrag-h2h rabitq-sim gpu-build-index gpu-setup gpu-verify gpu-lock wiki-fetch wiki-extract wiki-scale wiki-neo4j wiki-subgraph wiki-linkpred mcp-demo lock clean clean-data
+.PHONY: test lint graph-test stock-graph-test stock-crash-test stock-dump-restore-test stock-upgrade-test stock-writer-lock-test stock-release-smoke tjs-parity-test smoke-test test-all baseline-up baseline-down seed bench bench-live sweep sm2 fetch-dataset bench-public bench-repro fetch-hotpot graphrag graphrag-live bench-filtered ablation recall-decay tjs-open-ref tjs-open-live graphrag-h2h rabitq-sim gpu-build-index gpu-setup gpu-verify gpu-lock wiki-fetch wiki-extract wiki-scale wiki-neo4j wiki-subgraph wiki-linkpred mcp-demo agent-memory-test agent-memory-lme-smoke agent-memory-lme agent-memory-locomo lock clean clean-data
 
 PUBLIC_DATASET ?= gist-960-euclidean
 
@@ -486,6 +486,51 @@ wiki-linkpred:
 # `pip install -r requirements-mcp.txt`. See docs/mcp_agent_memory_v0.1.0.md.
 mcp-demo:
 	bash scripts/tridb_mcp_demo.sh tridb/postgres-trimodal:pg$(PG_MAJOR)
+
+# Agent-memory benchmark pipelines. Methodology:
+# docs/agent_memory_workload_characterization_v0.1.0.md; gap register and phased
+# plan: docs/agent_memory_reproduction_plan_v0.1.0.md.
+#
+# `agent-memory-test` runs anywhere (it is a scoped subset of `make test` + `make
+# lint`, kept for a fast edit loop on this path). The three run targets need a
+# live TriDB (TRIDB_DSN) and `pip install -r requirements-agent-memory.txt`; the
+# LongMemEval targets additionally need both vLLM endpoints from
+# scripts/serve_longmemeval_vllm.sh (answer :8000, embedding :8001).
+AGENT_MEMORY_SRC := bench/agent_memory
+AGENT_MEMORY_TESTS := tests/test_agent_memory_adapters.py \
+                      tests/test_longmemeval_pipeline.py \
+                      tests/test_locomo_pipeline.py
+LME_INPUT ?= data/longmemeval/memoryagentbench_longmemeval_sstar.json
+LME_OUT ?= bench/out/longmemeval_tridb
+LOCOMO_INPUT ?= data/locomo/locomo10.json
+LOCOMO_OUT ?= bench/out/locomo_tridb
+
+agent-memory-test:
+	$(PY) -m pytest $(AGENT_MEMORY_TESTS) -q
+	$(PY) -m ruff check $(AGENT_MEMORY_SRC) $(AGENT_MEMORY_TESTS)
+	$(PY) -m ruff format --check $(AGENT_MEMORY_SRC) $(AGENT_MEMORY_TESTS)
+
+# One sample, one question, no judge — proves the endpoints, the schema bootstrap,
+# and the artifact contract before committing to a 300-question run.
+agent-memory-lme-smoke:
+	$(PY) -m bench.agent_memory.longmemeval_pipeline \
+	  --input $(LME_INPUT) --output-dir $(LME_OUT)_smoke \
+	  --limit-samples 1 --limit-questions 1 --skip-judge
+
+# The paper-shaped run: 5 histories x 60 questions = 300. Judging defaults to the
+# MemoryAgentBench GPT-4o protocol and needs OPENAI_API_KEY; a local judge is a
+# protocol VARIANT and must not be reported as paper-equivalent.
+agent-memory-lme:
+	$(PY) -m bench.agent_memory.longmemeval_pipeline \
+	  --input $(LME_INPUT) --output-dir $(LME_OUT) --top-k 10
+
+agent-memory-locomo:
+	$(PY) -m bench.agent_memory.locomo_pipeline \
+	  --input $(LOCOMO_INPUT) \
+	  --retrieval-output $(LOCOMO_OUT)_retrieval.json \
+	  --output $(LOCOMO_OUT).json \
+	  --metrics-output $(LOCOMO_OUT)_metrics.json \
+	  --top-k 20 --workers 4
 
 baseline-up:
 	docker compose -f baseline/docker-compose.yml up -d
