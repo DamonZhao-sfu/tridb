@@ -39,6 +39,19 @@ construction cost, energy, growth, staleness, and tail behavior.
 
 ## 2. Evidence status and reading cautions
 
+> **Verification update (2026-07-29).** The PDF has since been read first-hand
+> and every figure reproduced in this document was checked against it: Table 3
+> (all nine rows), the Figure 10 TTFT pairs, the Figure 11 tail ratios, the §4.5
+> frontier points, the §4.7 growth numbers, and the §4.3 traffic shape all match.
+> The two prose/table inconsistencies flagged below are confirmed as the
+> paper's own. **One additional discrepancy found on that read:** §4.6's prose
+> lists five systems as accumulating staleness, but Figure 8b carries a
+> `max stale:` marker on six rows — including **HippoRAG v2 (max stale: 2)**,
+> which the prose omits. Cite the figure, not the sentence, for that claim; §4.6
+> below inherits the prose list. Details the reconstruction did not carry, plus
+> a stage-by-stage capability analysis, are in
+> [`agent_memory_system_design_v0.1.0.md`](agent_memory_system_design_v0.1.0.md).
+
 The paper is an arXiv v1 preprint. As of its 2026-06-04 submission, the arXiv
 record does not link an official code repository, and the paper describes its
 profiling harness as "to be open-sourced." The results are therefore primary

@@ -17,6 +17,19 @@
 
 ## 0. Source-access disclosure
 
+> **Resolved (2026-07-29, same day).** The PDF was supplied directly and read
+> first-hand after this document was written. Every paper figure cited here and
+> in the characterization doc was checked and **matches**; the flagged
+> prose/table inconsistencies are the paper's own, and one further prose/figure
+> mismatch was found (§4.6 staleness: prose lists five systems, Figure 8b marks
+> six, including HippoRAG v2). The "second-hand" caveat below is therefore
+> **lifted** — the paper column is now first-hand verified. Details the earlier
+> reconstruction did not carry, and a stage-by-stage capability gap analysis of
+> the seven-stage pipeline this plan's experiments presuppose, are in
+> [`agent_memory_system_design_v0.1.0.md`](agent_memory_system_design_v0.1.0.md),
+> which should be read **before** this plan: it establishes which pipeline
+> stages exist at all. The original disclosure is retained below for the record.
+
 The paper PDF was **not re-read for this document**. `arxiv.org` is blocked by
 this session's egress policy (proxy returned 403 to CONNECT for
 `arxiv.org:443`), as is `alphaxiv.org`. What was independently verified here is
