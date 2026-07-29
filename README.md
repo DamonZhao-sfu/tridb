@@ -285,3 +285,226 @@ Active development, tracked in Linear project **TriDB**. The **v1 tri-modal core
 ## License
 
 [MIT](LICENSE), consistent with the upstream [`microsoft/MSVBASE`](https://github.com/microsoft/MSVBASE) base, whose derived portions remain under Microsoft's MIT copyright.
+
+
+
+
+
+
+# LOCOMO and LongMemEval
+
+## 1. Start the existing local PostgreSQL cluster
+
+From the repository root:
+
+cd /local-scratch/localhome/hza214/tridb
+
+export PG_CONFIG=/usr/bin/pg_config
+export PG_BIN="$("$PG_CONFIG" --bindir)"
+export PGDATA="$PWD/.tridb-pgdata"
+export PGPORT=55432
+
+"$PG_BIN/pg_ctl" \
+  -D "$PGDATA" \
+  -l "$PGDATA/server.log" \
+  -o "-p $PGPORT -c listen_addresses=127.0.0.1 -c unix_socket_directories=$PGDATA" \
+  -w start
+
+Do not run initdb: .tridb-pgdata is already initialized as PostgreSQL 16.
+
+The existing cluster appears to have been initialized by your Unix user, so connect as that user:
+
+export PGUSER="$(id -un)"
+
+"$PG_BIN/psql" \
+  -h 127.0.0.1 -p "$PGPORT" -U "$PGUSER" -d postgres \
+  -c 'SELECT version();'
+
+## 2. Create the extensions
+
+The installed PG 16 tree already contains all three extension libraries. Create them in dependency order:
+
+"$PG_BIN/psql" \
+  -h 127.0.0.1 -p "$PGPORT" -U "$PGUSER" -d postgres \
+  -c 'CREATE EXTENSION IF NOT EXISTS vector;' \
+  -c 'CREATE EXTENSION IF NOT EXISTS graph_store_am;' \
+  -c 'CREATE EXTENSION IF NOT EXISTS tjs_pg;'
+
+Verify:
+
+"$PG_BIN/psql" \
+  -h 127.0.0.1 -p "$PGPORT" -U "$PGUSER" -d postgres \
+  -c "SELECT extname, extversion
+      FROM pg_extension
+      WHERE extname IN ('vector', 'graph_store_am', 'tjs_pg')
+      ORDER BY extname;"
+
+Only vector is required by these two adapters. The other extensions confirm that this is the complete TriDB installation.
+
+If you need to rebuild the extensions first:
+
+make -C pgvector PG_CONFIG="$PG_CONFIG"
+sudo make -C pgvector PG_CONFIG="$PG_CONFIG" install
+
+make -C src/graph_store PG_CONFIG="$PG_CONFIG"
+sudo make -C src/graph_store PG_CONFIG="$PG_CONFIG" install
+
+make -C src/tjs_pg PG_CONFIG="$PG_CONFIG"
+sudo make -C src/tjs_pg PG_CONFIG="$PG_CONFIG" install
+
+See docs/INSTALL_stock_pg.md:24.
+
+## 3. Prepare Python
+
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.lock
+
+export TRIDB_DSN="postgresql://${PGUSER}@127.0.0.1:${PGPORT}/postgres"
+
+The first adapter run may download BAAI/bge-small-en-v1.5 through fastembed. Its output dimension is 384.
+
+## 4. Smoke-test LOCOMO
+
+Point --input at the official locomo10.json:
+
+python -m bench.agent_memory.locomo_adapter \
+  --input /path/to/locomo/data/locomo10.json \
+  --output bench/out/locomo_tridb_smoke.json \
+  --top-k 10 \
+  --limit-samples 1
+
+Then run the full retrieval pass:
+
+python -m bench.agent_memory.locomo_adapter     --input /localhome/hza214/Mandol/experimental/self_host_benchmarks/locomo/data/locomo10.json    
+ --output bench/out/locomo_tridb_smoke.json     --top-k 10     --limit-samples 1
+
+python -m bench.agent_memory.locomo_adapter \
+  --input /localhome/hza214/Mandol/experimental/self_host_benchmarks/locomo/data/locomo10.json \
+  --output bench/out/locomo_tridb.json \
+  --top-k 10
+
+Each QA item receives:
+
+- tridb_prediction_context
+- tridb_prediction_retrieval
+- tridb_prediction_prompt
+
+This adapter does not call an answer LLM. To run LOCOMO’s end-to-end QA evaluation, send each tridb_prediction_prompt to your answer model and store the result as
+tridb_prediction; then invoke LOCOMO’s evaluator with eval_key="tridb_prediction".
+
+## 5. Smoke-test LongMemEval
+
+Session-level retrieval, matching its official flat-session baseline:
+
+python -m bench.agent_memory.longmemeval_adapter \
+  --input /path/to/longmemeval_s.json \
+  --output bench/out/longmemeval_tridb_session_smoke.jsonl \
+  --granularity session \
+  --retrieve-k 50 \
+  --limit 2
+
+Full session-level run:
+
+python -m bench.agent_memory.longmemeval_adapter \
+  --input /path/to/longmemeval_s.json \
+  --output bench/out/longmemeval_tridb_session.jsonl \
+  --granularity session \
+  --retrieve-k 50
+
+Turn-level variant:
+
+python -m bench.agent_memory.longmemeval_adapter \
+  --input /path/to/longmemeval_s.json \
+  --output bench/out/longmemeval_tridb_turn.jsonl \
+  --granularity turn \
+  --retrieve-k 50
+
+By default, LongMemEval indexes user turns only, matching the official flat baseline. --include-assistant is a separate corpus variant and should be reported as such.
+
+The produced JSONL can feed LongMemEval’s src/generation/run_generation.py using flat-session or flat-turn. It also contains retrieval metrics under retrieval_results.metrics.
+
+## 6. Stop PostgreSQL
+
+"$PG_BIN/pg_ctl" -D "$PGDATA" -m fast -w stop
+
+# Run the full Pipeline
+
+
+export VLLM_BASE_URL="http://127.0.0.1:8000/v1"
+export VLLM_API_KEY="EMPTY"
+
+python -m bench.agent_memory.locomo_pipeline \
+  --output bench/out/locomo_tridb_qwen.json \
+  --metrics-output bench/out/locomo_tridb_qwen_metrics.json \
+  --top-k 20
+
+## 7. Reproduce the 300-question LongMemEval experiment
+
+Prepare the LongMemEval dependencies and the official five-history
+MemoryAgentBench export once:
+
+```bash
+cd /local-scratch/localhome/hza214/tridb
+
+uv venv .venv
+uv pip install --python .venv/bin/python -r requirements-agent-memory.txt
+.venv/bin/python -m nltk.downloader punkt punkt_tab
+
+.venv/bin/python tools/fetch_memoryagentbench_longmemeval.py \
+  --output data/longmemeval/memoryagentbench_longmemeval_sstar.json
+```
+
+Start the answer model in the first terminal. This serves the
+`Qwen/Qwen3-32B-FP8` artifact under the experiment name `Qwen/Qwen3-32B` on
+port 8000:
+
+```bash
+cd /local-scratch/localhome/hza214/tridb
+export TRIDB_LME_VLLM_BIN="$(command -v vllm)"
+scripts/serve_longmemeval_vllm.sh answer
+```
+
+Start the embedding model on port 8001 in a second terminal:
+
+```bash
+cd /local-scratch/localhome/hza214/tridb
+export TRIDB_LME_VLLM_BIN="$(command -v vllm)"
+scripts/serve_longmemeval_vllm.sh embedding
+```
+
+Run the exact local-judge experiment in a third terminal:
+
+```bash
+cd /local-scratch/localhome/hza214/tridb
+export TRIDB_DSN="postgresql://$(id -un)@127.0.0.1:55432/postgres"
+
+.venv/bin/python -m bench.agent_memory.longmemeval_pipeline \
+  --input data/longmemeval/memoryagentbench_longmemeval_sstar.json \
+  --output-dir bench/out/longmemeval_tridb_qwen32b_local_judge \
+  --top-k 10 \
+  --max-prompt-memories 5 \
+  --answer-base-url http://127.0.0.1:8000/v1 \
+  --answer-api-key EMPTY \
+  --answer-model Qwen/Qwen3-32B \
+  --embedding-base-url http://127.0.0.1:8001/v1 \
+  --embedding-api-key EMPTY \
+  --embedding-model Qwen/Qwen3-Embedding-0.6B \
+  --judge-base-url http://127.0.0.1:8000/v1 \
+  --judge-api-key EMPTY \
+  --judge-model Qwen/Qwen3-32B
+```
+
+The command constructs each of the five histories once, answers all 60
+questions per history, retrieves top-10 TriDB chunks, assembles the best five
+chunks for Qwen3-32B, and writes accuracy, wall time, call counts, TTFT, and
+total-time distributions to:
+
+```text
+bench/out/longmemeval_tridb_qwen32b_local_judge/summary.json
+```
+
+The local Qwen judge is a protocol variant and is not directly comparable to
+the paper's GPT-4o judge. To run the official judging protocol instead, omit
+the three `--judge-*` options above and set `OPENAI_API_KEY`.
+
