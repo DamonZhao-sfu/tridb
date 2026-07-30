@@ -314,6 +314,11 @@ class TransitionResult:
 class IngestResult(TransitionResult):
     units: tuple[int, ...] = ()
     rejected: tuple[Mapping[str, Any], ...] = ()  # schema-gate failures (Omri §4.4)
+    # Omri Recommendation 10: LLM-bounded phases need external iteration caps,
+    # and a capped run is a RECORDED operating point, never a silent
+    # truncation. Set when an agentic strategy exhausted max_rounds or
+    # max_tool_calls; the operator still commits what exists.
+    capped: bool = False
 
 
 @dataclass(frozen=True)

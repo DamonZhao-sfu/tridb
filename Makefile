@@ -1,4 +1,4 @@
-.PHONY: test lint graph-test stock-graph-test stock-crash-test stock-dump-restore-test stock-upgrade-test stock-writer-lock-test stock-release-smoke tjs-parity-test smoke-test test-all baseline-up baseline-down seed bench bench-live sweep sm2 fetch-dataset bench-public bench-repro fetch-hotpot graphrag graphrag-live bench-filtered ablation recall-decay tjs-open-ref tjs-open-live graphrag-h2h rabitq-sim gpu-build-index gpu-setup gpu-verify gpu-lock wiki-fetch wiki-extract wiki-scale wiki-neo4j wiki-subgraph wiki-linkpred mcp-demo agent-memory-test agent-memory-lme-smoke agent-memory-lme agent-memory-locomo lock clean clean-data
+.PHONY: test lint gem-demo-fetch gem-demo graph-test stock-graph-test stock-crash-test stock-dump-restore-test stock-upgrade-test stock-writer-lock-test stock-release-smoke tjs-parity-test smoke-test test-all baseline-up baseline-down seed bench bench-live sweep sm2 fetch-dataset bench-public bench-repro fetch-hotpot graphrag graphrag-live bench-filtered ablation recall-decay tjs-open-ref tjs-open-live graphrag-h2h rabitq-sim gpu-build-index gpu-setup gpu-verify gpu-lock wiki-fetch wiki-extract wiki-scale wiki-neo4j wiki-subgraph wiki-linkpred mcp-demo agent-memory-test agent-memory-lme-smoke agent-memory-lme agent-memory-locomo lock clean clean-data
 
 PUBLIC_DATASET ?= gist-960-euclidean
 
@@ -531,6 +531,44 @@ agent-memory-locomo:
 	  --output $(LOCOMO_OUT).json \
 	  --metrics-output $(LOCOMO_OUT)_metrics.json \
 	  --top-k 20 --workers 4
+
+# --- GEM wiki demo (docs/agent_memory_gem_wiki_demo_plan_v0.1.0.md) ----------
+# Network-gated, like fetch-dataset/fetch-hotpot: NOT run by tests or CI. Every
+# response is cached under $(GEM_DEMO_SLICE)/cache, so a re-run issues zero
+# requests and reproduces the same slice.
+#
+# The seed list comes from the QUESTION set, not from a topic: seeding by topic
+# and hoping HotpotQA overlaps it resolved 0 of 1500 dev questions (measured).
+# Fetching the gold of the first $(GEM_DEMO_QUESTIONS) questions is what makes
+# act 2 gradeable — at the cost, stated wherever the metric appears, that the
+# pool is built to contain the gold.
+GEM_DEMO_SLICE ?= data/wiki_demo
+GEM_DEMO_ARTICLES ?= 700
+GEM_DEMO_QUESTIONS ?= 150
+GEM_DEMO_HOTPOT ?= data/hotpot/dev_slice.json
+GEM_DEMO_REVISION_CLASSES ?= 20
+GEM_DEMO_DSN ?= postgresql://hza214@127.0.0.1:55432/gem_demo
+GEM_DEMO_SCOPE ?= gem-wiki-demo
+GEM_DEMO_OUT ?= bench/out/gem_wiki_demo
+
+gem-demo-fetch:
+	$(PY) -m tools.fetch_hotpot --questions 1500 --out $(GEM_DEMO_HOTPOT)
+	$(PY) -m bench.agent_memory.demo.hotpot_link \
+	  --hotpot $(GEM_DEMO_HOTPOT) \
+	  --seeds-for-questions $(GEM_DEMO_QUESTIONS) > $(GEM_DEMO_SLICE).seeds
+	$(PY) -m bench.agent_memory.demo.wiki_source \
+	  --out $(GEM_DEMO_SLICE) --articles $(GEM_DEMO_ARTICLES) \
+	  --revision-entities 60 \
+	  --revision-class-entities $(GEM_DEMO_REVISION_CLASSES) \
+	  --seed-file $(GEM_DEMO_SLICE).seeds
+	$(PY) -m bench.agent_memory.demo.hotpot_link \
+	  --slice $(GEM_DEMO_SLICE) --hotpot $(GEM_DEMO_HOTPOT)
+
+gem-demo:
+	$(PY) -m bench.agent_memory.demo \
+	  --phase all --dsn $(GEM_DEMO_DSN) \
+	  --slice $(GEM_DEMO_SLICE) --scope $(GEM_DEMO_SCOPE) \
+	  --output $(GEM_DEMO_OUT) --reset
 
 baseline-up:
 	docker compose -f baseline/docker-compose.yml up -d

@@ -30,6 +30,11 @@ import requests
 
 from bench.agent_memory.backend import DEFAULT_DSN, MemoryUnit, TriDBMemoryBackend
 
+# Moved to bench/agent_memory/chunking.py so the GEM DeterministicIngest
+# strategy chunks through the SAME code path as this pipeline — the G2
+# regression gate compares the two and is only meaningful if they cannot drift.
+from bench.agent_memory.chunking import TiktokenSentenceChunker
+
 DEFAULT_ANSWER_BASE_URL = "http://127.0.0.1:8000/v1"
 DEFAULT_ANSWER_MODEL = "Qwen/Qwen3-32B"
 DEFAULT_EMBEDDING_BASE_URL = "http://127.0.0.1:8001/v1"
@@ -214,99 +219,6 @@ def load_workloads(
                 f"found {len(selected)} histories with counts {counts}"
             )
     return selected
-
-
-class TiktokenSentenceChunker:
-    """MemoryAgentBench-compatible 4,096-token sentence packing."""
-
-    _JOIN_MARGIN_TOKENS = 32
-
-    def __init__(
-        self,
-        *,
-        chunk_size: int = 4096,
-        tokenizer_model: str = "gpt-4o-mini",
-    ) -> None:
-        if chunk_size <= 0:
-            raise ValueError("chunk_size must be positive")
-        try:
-            import tiktoken
-        except ImportError as exc:
-            raise RuntimeError(
-                "tiktoken is required; install requirements-agent-memory.txt"
-            ) from exc
-        try:
-            import nltk
-        except ImportError as exc:
-            raise RuntimeError(
-                "nltk is required; install requirements-agent-memory.txt"
-            ) from exc
-        try:
-            self.encoding = tiktoken.encoding_for_model(tokenizer_model)
-        except KeyError:
-            self.encoding = tiktoken.encoding_for_model("gpt-4o-mini")
-        self.nltk = nltk
-        self.chunk_size = chunk_size
-        self.tokenizer_model = tokenizer_model
-
-    def _sentences(self, text: str) -> list[str]:
-        try:
-            return self.nltk.sent_tokenize(text)
-        except LookupError as exc:
-            raise RuntimeError(
-                "NLTK punkt data is missing; run: "
-                "python -m nltk.downloader punkt punkt_tab"
-            ) from exc
-
-    def chunk(self, text: str) -> list[str]:
-        chunks: list[str] = []
-        current_sentences: list[str] = []
-        current_tokens = 0
-        for sentence in self._sentences(text):
-            tokens = self.encoding.encode(
-                sentence,
-                allowed_special={"<|endoftext|>"},
-            )
-            if len(tokens) > self.chunk_size:
-                if current_sentences:
-                    chunks.append(" ".join(current_sentences))
-                    current_sentences = []
-                    current_tokens = 0
-                for start in range(0, len(tokens), self.chunk_size):
-                    chunks.append(
-                        self.encoding.decode(tokens[start : start + self.chunk_size])
-                    )
-                continue
-            packing_limit = max(1, self.chunk_size - self._JOIN_MARGIN_TOKENS)
-            if current_sentences and current_tokens + len(tokens) > packing_limit:
-                chunks.append(" ".join(current_sentences))
-                current_sentences = []
-                current_tokens = 0
-            current_sentences.append(sentence)
-            current_tokens += len(tokens)
-        if current_sentences:
-            chunks.append(" ".join(current_sentences))
-        bounded: list[str] = []
-        for chunk in chunks:
-            if not chunk.strip():
-                continue
-            tokens = self.encoding.encode(
-                chunk,
-                allowed_special={"<|endoftext|>"},
-            )
-            for start in range(0, len(tokens), self.chunk_size):
-                bounded.append(
-                    self.encoding.decode(tokens[start : start + self.chunk_size])
-                )
-        return bounded
-
-    def count(self, text: str) -> int:
-        return len(
-            self.encoding.encode(
-                text,
-                allowed_special={"<|endoftext|>"},
-            )
-        )
 
 
 class CallLedger:

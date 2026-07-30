@@ -12,7 +12,9 @@
 -- graph_store_am + tjs_pg. (i) is the CSR-lite page-layout work and is out of
 -- scope here.
 --
--- Placeholders: :dim (embedding dimension), :tbl_prefix (default gem_).
+-- Placeholder: :dim (embedding dimension), substituted by
+-- GemStore.init_schema(). Table names are fixed at the gem_ prefix; the
+-- operators reference them by name, so this file is not parameterised on it.
 
 -- ===========================================================================
 -- D_t — content

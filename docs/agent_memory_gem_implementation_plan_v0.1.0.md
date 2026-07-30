@@ -4,7 +4,10 @@
 > **Date:** 2026-07-30
 > **Status:** Build plan. Specifies the code for the four state-level operators,
 > the three ingest strategies, the salience policy, and policy evaluation.
-> **Nothing here is implemented yet** beyond the type layer noted in §0.
+> **Superseded on implementation status** by
+> [`agent_memory_gem_implementation_status_v0.1.0.md`](agent_memory_gem_implementation_status_v0.1.0.md):
+> G1–G8 code has since landed, unverified against a live engine. The rest of
+> this document — the design, the gates, the risks — still stands as written.
 > **Design source:** [`agent_memory_gem_interface_v0.1.0.md`](agent_memory_gem_interface_v0.1.0.md)
 > (interfaces, configuration matrix, measured engine constraints §6).
 > **Papers:** [GEM] arXiv:2605.26252v1 · [AM] arXiv:2606.06448v1.
