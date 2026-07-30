@@ -15,11 +15,23 @@ The two fit together cleanly: GEM's ``ingest`` strategy slot is exactly Omri's
 construction-form axis, so one memory implementation with swappable strategies
 yields the paper's taxonomy as CONFIGURATIONS rather than as separate systems.
 
-This package currently defines types and protocols only — no behaviour. See
-``docs/agent_memory_gem_interface_v0.1.0.md`` for the implementation plan, the
-configuration matrix, and what each milestone unblocks.
+See ``docs/agent_memory_gem_interface_v0.1.0.md`` for the configuration matrix
+and what each milestone unblocks, and
+``docs/agent_memory_gem_implementation_plan_v0.1.0.md`` for the build order.
+
+**What holds today is per-condition, never wholesale.** Use
+:mod:`~bench.agent_memory.gem.conformance` to produce the C1-C6 report; a
+configuration is labelled ``TriDB-vector`` (Paradigm II embedRAG) until every
+condition actually holds. ``reinforce`` and ``forget`` belong in every run
+manifest — a run with either on is not comparable to a paper row that had
+neither.
 """
 
+from bench.agent_memory.gem.conformance import ConformanceReport
+from bench.agent_memory.gem.forget import ForgetOperator
+from bench.agent_memory.gem.ingest import IngestOperator, validate_plan
+from bench.agent_memory.gem.memory import TriDBGovernedMemory
+from bench.agent_memory.gem.policy import PolicyEngine, seed_policies
 from bench.agent_memory.gem.protocols import (
     AgenticIngest,
     DeterministicIngest,
@@ -28,6 +40,15 @@ from bench.agent_memory.gem.protocols import (
     LLMMediatedIngest,
     MemoryView,
     SaliencePolicy,
+)
+from bench.agent_memory.gem.retrieve import RetrieveOperator
+from bench.agent_memory.gem.revise import ReviseOperator
+from bench.agent_memory.gem.salience import ExponentialSalience
+from bench.agent_memory.gem.store import GemStore, TriDBMemoryView
+from bench.agent_memory.gem.strategies import (
+    AgenticIngestStrategy,
+    DeterministicIngestStrategy,
+    LLMMediatedIngestStrategy,
 )
 from bench.agent_memory.gem.types import (
     Edge,
@@ -54,6 +75,21 @@ from bench.agent_memory.gem.types import (
 
 __all__ = [
     "AgenticIngest",
+    "AgenticIngestStrategy",
+    "ConformanceReport",
+    "DeterministicIngestStrategy",
+    "ExponentialSalience",
+    "ForgetOperator",
+    "GemStore",
+    "IngestOperator",
+    "LLMMediatedIngestStrategy",
+    "PolicyEngine",
+    "RetrieveOperator",
+    "ReviseOperator",
+    "TriDBGovernedMemory",
+    "TriDBMemoryView",
+    "seed_policies",
+    "validate_plan",
     "DeterministicIngest",
     "Edge",
     "EdgeKind",
