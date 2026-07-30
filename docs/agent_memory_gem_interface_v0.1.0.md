@@ -44,7 +44,7 @@ GEM", and lists what a **native engine** must supply:
 | policy postconditions compiled into the commit protocol | constraints + the atomic commit; §4.2 below shows one already enforcing a [GEM] correctness condition |
 
 TriDB is closer to [GEM]'s "native engine" than the prototype the paper ships.
-That is a claim worth *testing*, not asserting — §8 sets the gates.
+That is a claim worth *testing*, not asserting — §10 sets the gates.
 
 ## 2. Direct answers to the two questions asked
 
@@ -268,7 +268,173 @@ requires repeated retrieval to *strictly* reduce eligibility for attenuation —
 it is the coupling between C6 and C5 that makes retention relevance-driven
 rather than age-driven.
 
-## 6. Three design tensions, flagged not buried
+## 6. What the TriDB engine layer must change
+
+The Python layer is not the whole story. Every claim below was executed against
+the live stack, not inferred from source.
+
+### 6.1 Retrieval — tri-modal today, with two constraints
+
+**Yes, `tjs_open` already fuses all three modalities** (§4.1). Two constraints
+shape how GEM must use it:
+
+**(a) The fused vector-first path requires `hnsw.iterative_scan =
+relaxed_order`.** The engine refuses `strict_order` outright. So fused and
+vector-only retrieval are *different operating points* and must never be pooled
+in one table.
+
+**(b) `edge_type` is a single id, not a set.** The parameter is one `int32`,
+with `0` = ANY. Measured on a fresh database:
+
+```
+extension-only  -> 1        association-only -> 2        ANY (0) -> 1,2
+... after registering a third type and adding one edge of it:
+                                                        ANY (0) -> 1,2,3
+```
+
+**This is fine for GEM, but only under a specific design choice**: register
+exactly **two** native edge types, `extension` and `association`, and keep the
+relation name (`moved_to`, `part_of`, …) in `gem_edge` relationally. Then
+extension-only traversal (C3), association-only expansion, and both-kinds
+(ANY) are all expressible with **zero engine change**. Registering per-`rel`
+native types would break this — "all extension edges regardless of rel" is not
+expressible against an equality filter. Recorded here because the choice is
+easy to get wrong and expensive to migrate.
+
+### 6.2 Writes — where the actual work is
+
+| GEM write | Engine support today | Verdict |
+|---|---|---|
+| unit row + vector + graph vertex, one txn | `gph_upsert_vertex` in the caller's txn | ✅ proven (PR #1) |
+| typed edge insert | `gph_insert_edge`, batch `gph_insert_edges` | ✅ |
+| supersede a field value | relational; the partial unique index enforces C1 | ✅ proven (§4.2) |
+| **salience write (C6)** | heap UPDATE of non-indexed columns | ✅ **but needs `fillfactor`** — see 6.3 |
+| **re-embed on revision** | UPDATE of the hnsw-indexed column | ⚠️ **index churn** — see 6.3 |
+| edge rewire | no edge UPDATE; tombstone + insert | ⚠️ two steps, acceptable |
+| archive / reclaim | `gph_tombstone_vertex/_edge`, `gph_freeze` | ⚠️ workable |
+| **propagate to dependents (C3)** | `direction=in`/`both` **RAISEs** (ADR-0016 deferred) | ❌ **design around it** — see 6.4 |
+| **snapshot-consistent cross-modal read** | commit-visible, not snapshot-isolated | ❌ **real engine gap** — see 6.5 |
+
+### 6.3 The two write costs, measured
+
+C6 makes **every retrieval a write**, so the cost of that write decides whether
+governed memory is affordable. Measured on 2,000 units, 200 updates each:
+
+```
+C6 salience write (embedding UNCHANGED):
+  fillfactor=100 :  200 updates,  168 HOT (84.0%),  size +8192 B
+  fillfactor= 70 :  200 updates,  200 HOT (100.0%), size    +0 B
+
+revision re-embed (embedding CHANGED — the hnsw-indexed column):
+  fillfactor= 70 :  200 updates,    0 HOT (0.0%),   size +73728 B
+```
+
+Two conclusions, both actionable:
+
+1. **`gem_unit` and `gem_field_value` must be created `WITH (fillfactor=70)`.**
+   At the default 100 there is no free space for heap-only tuples, so 16% of
+   C6's writes become non-HOT and touch every index on the row. At 70, C6 is
+   **100% HOT and costs zero index churn** — the salience write is genuinely
+   free of the vector index. This is a one-line schema change, not an engine
+   change, and it is the difference between C6 being cheap and C6 being a tax
+   on every query.
+2. **Re-embedding is the expensive write, not salience.** Refreshing a unit's
+   vector is 0% HOT and grew the relation by ~369 B per update — every refresh
+   is an HNSW insert plus a dead tuple. `revise` must therefore **batch
+   embedding refreshes** rather than re-embed per field change, and the
+   resulting recall drift is measurable with the repo's existing
+   `bench/recall_decay.py`.
+
+### 6.4 C3 propagation needs a direction the engine does not have
+
+The adjacency list is **out-edges only**. `gph_traverse_typed(src, type, 1, …)`
+(direction=in) raises:
+
+```
+ERROR: graph_store: only GRAPH_SCAN_OUTGOING is supported (got 1)
+DETAIL: direction=in/both (getBacklinks) needs a reverse adjacency index —
+        a follow-on, format-touching plan (docs/decisions/0016).
+```
+
+ADR-0016 costs reverse adjacency at roughly **2× edge storage plus a second
+GenericXLog page per insert**, and calls it format-touching — it needs its own
+ADR and a concurrency probe. That is far too large to pull into this work.
+
+**The design answer is to orient extension edges in the propagation
+direction**: write `A --extension--> B` to mean *"a change in A entails
+re-evaluating B"*, so `revise` only ever walks out-edges. This is expressible
+today and costs nothing. Its limitation must be stated honestly: a
+bidirectional entailment needs **two** edges, and any query of the form "what
+does B depend on?" is not answerable without reverse adjacency. If a workload
+needs that, ADR-0016 becomes a prerequisite rather than an optimisation.
+
+### 6.5 The one real engine gap: the graph leg is not snapshot-isolated
+
+`gph_xmin_visible()` is commit visibility, not snapshot visibility:
+
+```c
+if (TransactionIdIsCurrentTransactionId(xmin)) return true;
+return TransactionIdDidCommit(xmin);      /* NOT XidInMVCCSnapshot */
+```
+
+Reproduced live with two sessions and a `REPEATABLE READ` snapshot:
+
+```
+A opens a REPEATABLE READ snapshot
+  graph neighbors: [7]   heap rows: 2
+
+[C writes an edge, UNCOMMITTED]      A graph neighbors: [7]      <- no dirty read
+[C rolls back]                       A graph neighbors: [7]      <- clean
+
+[B COMMITS an edge, after A's snapshot was taken]
+  A graph neighbors: [7, 8]
+  A heap rows      : [6, 7]
+  HEAP  respects the snapshot: YES
+  GRAPH respects the snapshot: NO
+  => TORN: graph returns dst 8 whose row this snapshot CANNOT see
+```
+
+What this means for GEM, precisely:
+
+- **C2 (transition soundness) is SAFE.** Uncommitted state is invisible and a
+  rollback leaves nothing behind, so "evaluate the proposed `M_{t+1}` and commit
+  atomically or abort" ([GEM] Algorithm 1 line 12) holds today. This is the
+  condition that matters most, and TriDB already satisfies it.
+- **Read consistency across a multi-statement operator does NOT hold.** Any
+  operator that reads the graph more than once, or reads graph and heap
+  together, can observe a topology newer than its snapshot. Concretely:
+  `revise`'s propagation walk can see edges appear mid-walk, and `retrieve`
+  with C6 can reinforce a unit whose row its own snapshot cannot return.
+
+This is DEV-1166, already known and already quantified by
+`bench/wiki_consistency.py` (the 1.0% residual tear, heap legs 0.0%). It is
+**the** engine change GEM wants: per-tuple `xmin`/`xmax` checked against the
+caller's snapshot via `XidInMVCCSnapshot` rather than `TransactionIdDidCommit`.
+The layout design (`docs/graph_store_layout_v0.1.0.md` §"MVCC visibility")
+already specifies `GraphTupleSatisfiesSnapshot`; it is the implementation that
+is deferred.
+
+**Until it lands**, GEM operators must be written defensively: take the
+topology snapshot once per operator (materialise the reach set at the start of
+a propagation walk rather than re-traversing), and record in every run manifest
+that graph reads are commit-visible. A GEM conformance claim that depends on
+repeatable-read topology cannot be made on this engine today.
+
+### 6.6 Summary — what is Python work and what is engine work
+
+| Work | Layer | Blocking? |
+|---|---|---|
+| four operators, ingest strategies, salience policy, policy evaluation | **Python** | no |
+| two-edge-kind registration, `fillfactor=70`, batched re-embedding, out-oriented extension edges | **Python/schema** | no — design choices, zero engine change |
+| per-tuple snapshot visibility in the graph AM (DEV-1166) | **engine (C)** | not blocking C2; blocks a repeatable-read conformance claim |
+| reverse adjacency (ADR-0016) | **engine (C), format-touching** | not blocking, if extension edges are oriented outward |
+| edge attributes in the AM (weights on native edges) | **engine (C)** | not blocking — `gem_edge` carries them relationally |
+
+**The honest headline: implementing ingest, revision and retrieval needs no C
+changes.** One engine gap (snapshot isolation) bounds what can be *claimed*
+about concurrent correctness, not what can be built.
+
+## 7. Three design tensions, flagged not buried
 
 **(a) C6 changes what [AM] §4.8 measures.** With `reinforce=True`, retrieval
 latency includes a write. TTFT is no longer a pure read path. That is not a bug
@@ -290,7 +456,7 @@ salience is a **derived** signal that the scope predicate does not cover. Any
 shared-store configuration must either partition salience by scope or report
 the leakage rate. Filed as an explicit gate, not solved here.
 
-## 7. Configuration matrix — [AM]'s taxonomy as settings
+## 8. Configuration matrix — [AM]'s taxonomy as settings
 
 | [AM] system / paradigm | `ingest` | `mode` | `revise` | `forget` | `reinforce` |
 |---|---|---|---|---|---|
@@ -307,7 +473,7 @@ The last row is the one no system in [AM]'s Table 1 occupies and no paradigm in
 [GEM]'s Table 1 covers. It is the contribution position, reachable only after
 M1–M4 below.
 
-## 8. Build order, and what each step unblocks
+## 9. Build order, and what each step unblocks
 
 | Milestone | Deliverable | Unblocks |
 |---|---|---|
@@ -316,14 +482,14 @@ M1–M4 below.
 | **M2** | NVML sampler → `gem_transition.gpu_joules` | **[AM] §4.2 completes** (Total kJ, J/correct — the 2 missing columns), and construction energy |
 | **M3** | LC arm (`ingest` absent, passthrough retrieval) | **[AM] §4.1 completes** |
 | **M4** | `LLMMediatedIngest` (both modes) + `validate()` | [AM] §4.3 (traffic shape), §4.4 (capability floor), and the first genuinely tri-modal TriDB row |
-| **M5** | `retrieve(reinforce=True)` + `revise` | C3/C6; the **cost-of-C6** measurement (§6a) |
+| **M5** | `retrieve(reinforce=True)` + `revise` | C3/C6; the **cost-of-C6** measurement (§7a) |
 | **M6** | `forget` ladder + C5 accounting | [AM] §4.7 growth with a *bounded* store — which none of [AM]'s nine systems does |
 | **M7** | `AgenticIngest` | Paradigm IV row |
 
 M1–M3 are the [AM] reproduction critical path and need **no** GEM semantics.
 M4 onward is where the two papers combine.
 
-## 9. Honesty gates
+## 10. Honesty gates
 
 - **Naming.** Until M4, every result is `TriDB-vector` / Paradigm II embedRAG.
   A GEM-conformant label requires C1–C6 all holding, and C2/C3/C5/C6 are not
@@ -344,7 +510,7 @@ M4 onward is where the two papers combine.
 - **Hardware.** [AM] is one H100 80 GB; we are GX10/Spark. Absolute numbers are
   never comparable — `paper_hardware_match: false` propagates.
 
-## 10. References
+## 11. References
 
 Orogat, A., & Mansour, E. (2026). *Is Agent Memory a Database? Rethinking Data
 Foundations for Long-Term AI Agent Memory.* arXiv:2605.26252v1.

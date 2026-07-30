@@ -36,7 +36,13 @@ CREATE TABLE IF NOT EXISTS gem_unit (
     created_at    timestamptz NOT NULL DEFAULT now(),
     metadata      jsonb       NOT NULL DEFAULT '{}'::jsonb,
     UNIQUE (scope_id, title)
-);
+)
+-- C6 makes EVERY retrieval a write (salience, access_count, last_access — none
+-- of them indexed). Measured on 2,000 units x 200 updates: at the default
+-- fillfactor=100 only 84% of those updates are heap-only (HOT) and the relation
+-- grows; at 70 it is 100% HOT and costs ZERO bytes, so the salience write never
+-- touches the HNSW index. See docs/agent_memory_gem_interface_v0.1.0.md §6.3.
+WITH (fillfactor = 70);
 
 -- Field value history H_{i,j} = <(v, t, pi)>. Updates APPEND; the prior value
 -- is retained as historical evidence rather than overwritten.
@@ -63,7 +69,9 @@ CREATE TABLE IF NOT EXISTS gem_field_value (
     state          text NOT NULL DEFAULT 'active'
                    CHECK (state IN ('active','compressed','hidden','archived')),
     embedding      vector(:dim)                 -- optional fact-grain vector
-);
+)
+-- Same reason as gem_unit: per-field salience rises on every access (C6).
+WITH (fillfactor = 70);
 
 -- *** C1 / Observation 3a, enforced by the engine rather than by convention ***
 -- Observation 3a: "Append-only storage without semantic units cannot satisfy
@@ -100,8 +108,16 @@ CREATE INDEX IF NOT EXISTS gem_unit_hnsw
 -- only. Association edges support retrieval context expansion without
 -- propagation." Register them as separate native edge types so the operator
 -- can traverse one kind without seeing the other:
---     graph_store.register_edge_type('extension:' || rel)
---     graph_store.register_edge_type('association:' || rel)
+--     graph_store.register_edge_type('extension')
+--     graph_store.register_edge_type('association')
+--
+-- EXACTLY TWO native types, and the relation name (`moved_to`, `part_of`, ...)
+-- stays in `rel` below. tjs_open / gph_traverse_typed take a SINGLE type id
+-- (0 = ANY), not a set, so registering a native type per rel would make "all
+-- extension edges regardless of rel" inexpressible against an equality filter.
+-- With two types: extension-only (C3), association-only, and both (ANY) all
+-- work with zero engine change. Verified live; see
+-- docs/agent_memory_gem_interface_v0.1.0.md §6.1.
 CREATE TABLE IF NOT EXISTS gem_edge (
     src             bigint NOT NULL REFERENCES gem_unit(id) ON DELETE CASCADE,
     dst             bigint NOT NULL REFERENCES gem_unit(id) ON DELETE CASCADE,
