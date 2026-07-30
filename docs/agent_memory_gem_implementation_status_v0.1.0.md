@@ -27,10 +27,17 @@ this document supersedes.
 | — (new) | `.../plan.py` | the write-plan vocabulary shared by strategies and operators |
 | — (new) | `bench/agent_memory/chunking.py` | `TiktokenSentenceChunker`, moved verbatim out of `longmemeval_pipeline.py` |
 
-Tests: `tests/test_gem_unit.py` (71), `tests/test_gem_strategies.py` (38),
-`tests/test_gem_conformance.py` (8 report-semantics + 7 live),
-`tests/test_gem_live.py` (17 live). Suite: **742 passed, 26 skipped**
-(was 625 passed, 2 skipped).
+Tests: `tests/test_gem_unit.py`, `tests/test_gem_strategies.py`,
+`tests/test_gem_roundtrip.py`, plus `tests/test_gem_conformance.py` and
+`tests/test_gem_live.py` (live halves skip-gated). Suite: **764 passed,
+26 skipped** (was 625 passed, 2 skipped).
+
+`test_gem_roundtrip.py` is worth calling out: it runs the real operators against
+a fake that keeps rows and **enforces the C1 partial unique index**, so the
+paper's own Figure 1 scenario is exercised end to end — append March 15, watch
+an unsuperseded April 20 abort, supersede it properly, and confirm one current
+value with the prior one chained. Statement-level tests cannot catch a wrong
+*sequence* of individually-correct statements; this one can.
 
 ## 2. What is verified, and what is not
 
@@ -87,7 +94,30 @@ PG 16/17 + pgvector + graph_store_am + tjs_pg.
   `locomo_pipeline.py` still write through `TriDBMemoryBackend`; routing them
   through `TriDBGovernedMemory` is the G2 work item.
 
-## 5. Deviations from the plan worth flagging
+## 5. Defects found and fixed during review
+
+An adversarial pass over the diff, plus a sweep that replays every operator's
+emitted SQL and type-checks each parameter against its placeholder's context,
+found eight real defects. All are fixed, and each carries a regression test
+**verified to fail without the fix**.
+
+| # | Defect | Consequence |
+|---|---|---|
+| 1 | `retrieve._temporal` bound its ranking vector to the wrong placeholder — the vector sits in the SELECT list and is the FIRST parameter, but was appended last | every argument shifted one position; the temporal route could not run. A placeholder *count* check cannot see this |
+| 2 | All four operators captured their result **inside** the `with` block, but `transition()` samples C5, evaluates `P_t`, and logs during `__exit__` | `transition_id` always `None`, `policies_evaluated` always empty, `active_units`/`active_fields` always `None` on every result — while the `gem_transition` row itself was correct, so the log and the API disagreed |
+| 3 | `policy._dependents_flagged` read `delta.propagated_units` (the units it just *flagged*) instead of the units that *changed* | demanded the flagged units' own dependents also be flagged — one hop further than anyone flags. The default `propagate-on-change` policy aborted **every** ingest on any `A→B→C` extension chain |
+| 4 | `gem_field_value.transition_id` was never populated | C4's provenance column, documented as "the transition that committed it", was always NULL. Fixed by reserving the id at the top of the envelope via `nextval` |
+| 5 | `SPLIT_TOPIC` ops had no apply branch | the agentic `split_topic` tool returned `{"ok": true}` to the model and did nothing — a no-op counted as a write |
+| 6 | `validate_plan` built `defined_refs` from *all* upserts, including rejected ones | a dependent of a rejected upsert passed the dangling-vertex gate, then failed to resolve at apply and rolled the whole batch back — breaking the per-op rejection contract the function documents |
+| 7 | `revise._split_topics` re-detected its own output | the split-out unit inherits the field history that triggered it, so every `revise()` forked another unit, unboundedly |
+| 8 | duplicate-merge re-pointed `gem_edge` rows onto the winner without guarding the `(src, dst, edge_type)` primary key | a near-duplicate pair sharing a target aborted the transaction and lost every repair in the batch |
+
+Two of these (#2, #3) would have been invisible until a live run and then
+misleading rather than loud — #2 makes the API disagree with its own log, #3
+turns the default policy into a blanket ingest failure. Worth noting for the
+G2 gate: neither would have shown up as a wrong *number*.
+
+## 6. Deviations from the plan worth flagging
 
 - **`plan.py` is new.** The plan listed `UpsertUnit` / `AppendFieldValue` /
   `LinkUnits` / `SplitTopic` as Protocols in `protocols.py`, but the

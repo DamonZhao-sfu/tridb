@@ -97,10 +97,13 @@ class ReviseOperator:
 
                 self._reembed(tx, dirty)
 
-                delta = tx.delta.freeze()
-                cost = tx.meter.freeze(time.perf_counter() - started)
-                transition_id = tx.transition_id
-                policies = tuple(tx.policies_evaluated)
+            # Captured AFTER the envelope closes: transition() samples the C5
+            # counts, evaluates P_t, and writes the log during __exit__, so
+            # anything read inside the body is stale.
+            delta = tx.delta.freeze()
+            cost = tx.meter.freeze(time.perf_counter() - started)
+            transition_id = tx.transition_id
+            policies = tuple(tx.policies_evaluated)
         except Exception as exc:  # noqa: BLE001 — reported, not swallowed
             return RevisionResult(
                 operator="revise",
@@ -212,14 +215,30 @@ class ReviseOperator:
                 " valid_to, now()) WHERE unit_id = %s",
                 (keep, drop),
             )
+            # The primary key is (src, dst, edge_type), so re-pointing an edge
+            # onto the winner collides whenever the winner already has the same
+            # edge — a common shape for near-duplicates. A collision would abort
+            # the transaction and lose EVERY repair in the batch, so the
+            # redundant edge is tombstoned instead of moved.
             tx.execute(
-                "UPDATE gem_edge SET src = %s WHERE src = %s AND dst <> %s",
-                (keep, drop, keep),
+                "UPDATE gem_edge e SET src = %s WHERE e.src = %s AND e.dst <> %s"
+                "  AND NOT EXISTS (SELECT 1 FROM gem_edge w WHERE w.src = %s"
+                "     AND w.dst = e.dst AND w.edge_type = e.edge_type)",
+                (keep, drop, keep, keep),
             )
             tx.execute(
-                "UPDATE gem_edge SET dst = %s WHERE dst = %s AND src <> %s",
-                (keep, drop, keep),
+                "UPDATE gem_edge e SET dst = %s WHERE e.dst = %s AND e.src <> %s"
+                "  AND NOT EXISTS (SELECT 1 FROM gem_edge w WHERE w.dst = %s"
+                "     AND w.src = e.src AND w.edge_type = e.edge_type)",
+                (keep, drop, keep, keep),
             )
+            tombstoned = tx.execute(
+                "UPDATE gem_edge SET tombstoned_at = now()"
+                " WHERE (src = %s OR dst = %s) AND tombstoned_at IS NULL"
+                " RETURNING src",
+                (drop, drop),
+            ).fetchall()
+            tx.delta.edges_tombstoned += len(tombstoned)
             tx.execute("UPDATE gem_unit SET state = 'archived' WHERE id = %s", (drop,))
             tx.delta.units_archived += 1
             tx.delta.units_updated += 1
@@ -254,6 +273,9 @@ class ReviseOperator:
         if not seeds:
             return []
         extension_type = self.store.edge_type_id("extension")
+        # The seeds are what CHANGED; the reach set is what gets flagged. The
+        # C3 postcondition needs the former (see policy._dependents_flagged).
+        tx.changed_units.extend(int(seed) for seed in seeds)
 
         repairs: list[Mapping[str, Any]] = []
         for seed in seeds:
@@ -333,6 +355,11 @@ class ReviseOperator:
             "SELECT fv.unit_id, fv.field, count(*) FROM gem_field_value fv"
             " JOIN gem_unit u ON u.id = fv.unit_id"
             " WHERE u.scope_id = %s AND u.state = 'active'"
+            # A unit that IS the product of a split already holds the whole
+            # field history that triggered it, so it re-matches its own
+            # threshold on every subsequent tick. Without this the operator
+            # forks a new unit per field per revise() call, unboundedly.
+            "   AND u.metadata->>'split_from' IS NULL"
             " GROUP BY fv.unit_id, fv.field HAVING count(*) >= %s",
             (scope_id, self.split_references),
         ).fetchall()

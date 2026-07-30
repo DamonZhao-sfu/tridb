@@ -116,15 +116,23 @@ class AgenticIngestStrategy:
         titles_in_plan: dict[str, str] = {}
         calls_remaining = self.max_tool_calls
 
-        for event in events:
-            for chunk in self.chunker.chunk(event.content):
-                used = self._run_loop(
-                    event, chunk, view, ops, titles_in_plan, calls_remaining
-                )
-                calls_remaining -= used
-                if calls_remaining <= 0:
-                    self.capped = True
-                    return ops
+        # Materialise the work list so "did the budget run out with work still
+        # to do?" is answerable. An agent that spends its LAST permitted call
+        # and then legitimately reports done is NOT capped, and recording it as
+        # capped would misreport the operating point in the one place the flag
+        # exists to describe honestly.
+        work = [
+            (event, chunk)
+            for event in events
+            for chunk in self.chunker.chunk(event.content)
+        ]
+        for event, chunk in work:
+            if calls_remaining <= 0:
+                self.capped = True  # budget gone with chunks still unprocessed
+                break
+            calls_remaining -= self._run_loop(
+                event, chunk, view, ops, titles_in_plan, calls_remaining
+            )
         return ops
 
     def _run_loop(

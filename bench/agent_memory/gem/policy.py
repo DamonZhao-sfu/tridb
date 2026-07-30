@@ -79,10 +79,15 @@ def _no_duplicate_current(tx: Tx, params: Mapping[str, Any]) -> bool:
 def _dependents_flagged(tx: Tx, params: Mapping[str, Any]) -> bool:
     """C3: every extension-reachable dependent of a changed unit is flagged.
 
-    Checks one hop from the units this transition propagated to; the multi-hop
-    walk is ``revise``'s job and is bounded by ``max_hops``.
+    Checks one hop out from the units this transition CHANGED
+    (``tx.changed_units``) — deliberately not from ``delta.propagated_units``,
+    which holds the dependents that got flagged. Reading the latter would demand
+    that the flagged units' own dependents also be flagged, one hop further than
+    ingest ever flags, so any ``A -ext-> B -ext-> C`` chain would abort every
+    ingest under the default ``propagate-on-change`` policy. The multi-hop walk
+    is ``revise``'s job and is bounded by ``max_hops``.
     """
-    changed = list(tx.delta.propagated_units)
+    changed = list(tx.changed_units)
     if not changed:
         return True
     row = tx.execute(

@@ -400,6 +400,50 @@ class TestAgenticCaps:
         assert strategy.capped is True
         assert ops, "a capped run must still commit what exists"
 
+    def test_stopping_on_the_budget_is_capped_even_if_done_would_be_next(self):
+        """The budget check fires BEFORE the agent's next turn, so we never
+        learn it was about to finish. Recording that as capped is the honest
+        reading: the loop was stopped, not concluded."""
+        strategy = AgenticIngestStrategy(
+            client=ScriptedClient(
+                [
+                    {"tool": "search_memory", "args": {}},
+                    {"tool": "search_memory", "args": {}},
+                    {"done": True},  # never reached — budget already spent
+                ]
+            ),
+            model="m",
+            max_rounds=10,
+            max_tool_calls=2,
+            chunker=FakeChunker(1),
+        )
+        strategy.plan([_event()], FakeView())
+        assert strategy.capped is True
+
+    def test_finishing_under_budget_is_not_capped(self):
+        strategy = AgenticIngestStrategy(
+            client=ScriptedClient(
+                [{"tool": "search_memory", "args": {}}, {"done": True}]
+            ),
+            model="m",
+            max_rounds=10,
+            max_tool_calls=5,
+            chunker=FakeChunker(1),
+        )
+        strategy.plan([_event()], FakeView())
+        assert strategy.capped is False
+
+    def test_budget_exhausted_with_chunks_left_is_capped(self):
+        strategy = AgenticIngestStrategy(
+            client=ScriptedClient([{"tool": "search_memory", "args": {}}] * 20),
+            model="m",
+            max_rounds=10,
+            max_tool_calls=2,
+            chunker=FakeChunker(5),  # five chunks, budget for ~one
+        )
+        strategy.plan([_event()], FakeView())
+        assert strategy.capped is True
+
     def test_a_clean_finish_is_not_capped(self):
         strategy = AgenticIngestStrategy(
             client=ScriptedClient([{"done": True}]),

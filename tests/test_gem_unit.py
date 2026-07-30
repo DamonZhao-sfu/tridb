@@ -344,7 +344,7 @@ class TestDeterministicStrategy:
 
 class TestTransitionEnvelope:
     def test_commit_logs_on_the_main_connection_inside_the_transaction(self):
-        store = _store([(r"RETURNING t", [(42,)])])
+        store = _store([(r"^SELECT nextval", [(42,)]), (r"RETURNING t", [(42,)])])
         with store.transition("ingest", "s1", "construction") as tx:
             tx.execute("SELECT 1")
         assert tx.transition_id == 42
@@ -357,7 +357,7 @@ class TestTransitionEnvelope:
         """C2 is 'a violating transition is rejected' — an abort that vanishes
         from the trajectory would make the condition unobservable."""
         audit = FakeConn([(r"RETURNING t", [(7,)])])
-        store = _store(audit=audit)
+        store = _store([(r"^SELECT nextval", [(7,)])], audit=audit)
         with pytest.raises(RuntimeError, match="boom"):
             with store.transition("ingest", "s1", "construction"):
                 raise RuntimeError("boom")
@@ -366,9 +366,11 @@ class TestTransitionEnvelope:
         assert not store.conn.ran(r"INSERT INTO gem_transition")
         logged = audit.sql_matching(r"INSERT INTO gem_transition")
         assert len(logged) == 1
+        # column order: t, scope_id, operator, phase, committed, aborted_reason
         params = audit.statements[0][1]
-        assert params[3] is False  # committed
-        assert "boom" in params[4]  # aborted_reason
+        assert params[0] == 7  # the id reserved before the body ran
+        assert params[4] is False  # committed
+        assert "boom" in params[5]  # aborted_reason
 
     def test_audit_logging_never_masks_the_original_error(self):
         class ExplodingConn(FakeConn):
@@ -385,12 +387,12 @@ class TestTransitionEnvelope:
             raise PolicyViolation("bound-active-state", "too many active units")
 
         audit = FakeConn([(r"RETURNING t", [(1,)])])
-        store = _store(audit=audit, hook=hook)
+        store = _store([(r"^SELECT nextval", [(1,)])], audit=audit, hook=hook)
         with pytest.raises(PolicyViolation):
             with store.transition("ingest", "s1", "construction") as tx:
                 tx.execute("INSERT INTO gem_unit DEFAULT VALUES")
         assert store.conn.rolled_back
-        assert "bound-active-state" in audit.statements[0][1][4]
+        assert "bound-active-state" in audit.statements[0][1][5]
 
     def test_c5_active_counts_are_sampled_on_every_transition(self):
         store = _store(
@@ -409,8 +411,8 @@ class TestTransitionEnvelope:
         with store.transition("ingest", "s1", "construction") as tx:
             tx.execute("SELECT 1")
             tx.execute("SELECT 2")
-        # 2 explicit + 2 from the C5 sample
-        assert tx.meter.db_statements == 4
+        # 1 id reservation + 2 explicit + 2 from the C5 sample
+        assert tx.meter.db_statements == 5
 
 
 class TestWriterLockAndAllocator:
@@ -675,6 +677,107 @@ class TestIngestOperator:
         result = operator.ingest([_event()], strategy=Assoc())
         assert result.committed
         assert result.delta.propagated_units == ()
+
+    def test_the_result_carries_the_transition_id_and_the_c5_counts(self):
+        """Regression: transition() samples C5, evaluates P_t and writes the log
+        during __exit__. Capturing the result INSIDE the with body returned
+        transition_id=None, policies_evaluated=(), and active_units=None on
+        every operator, while the gem_transition row itself was correct — so
+        any caller reading C5 or the policy list off the result was misled."""
+        responses = self._responses() + [
+            (r"^SELECT nextval", [(77,)]),
+            (r"count\(\*\) FROM gem_unit", [(5,)]),
+            (r"count\(\*\) FROM gem_field_value", [(9,)]),
+        ]
+        store = _store(responses)
+        operator = IngestOperator(store, embedder=FakeEmbedder())
+        result = operator.ingest(
+            [_event()], strategy=DeterministicIngestStrategy(chunker=FakeChunker(1))
+        )
+        assert result.committed, result.aborted_reason
+        assert result.transition_id == 77
+        assert result.delta.active_units == 5
+        assert result.delta.active_fields == 9
+
+    def test_provenance_cites_the_reserved_transition_id(self):
+        """C4's gem_field_value.transition_id is documented as "the transition
+        that committed it". The id is reserved at the top of the envelope so a
+        value written mid-body can actually cite it."""
+        responses = self._responses() + [(r"^SELECT nextval", [(77,)])]
+        store = _store(responses)
+        operator = IngestOperator(store, embedder=FakeEmbedder())
+        operator.ingest(
+            [_event()], strategy=DeterministicIngestStrategy(chunker=FakeChunker(1))
+        )
+        params = next(
+            p
+            for sql, p in store.conn.statements
+            if "INSERT INTO gem_field_value" in sql
+        )
+        assert params[-1] == 77, "the field value did not record its transition"
+
+    def test_a_rejected_upsert_also_rejects_its_dependents(self):
+        """validate_plan promises per-OP rejection. If a rejected upsert still
+        counted as defining its ref, the dependent op would pass the gate,
+        reach apply, fail to resolve, and roll the WHOLE batch back."""
+        ops = [
+            planmod.upsert_unit(scope_id="s1", title="", ref="a", embed_text="x"),
+            planmod.append_field_value(ref="a", field="f", value="v", valid_from="t"),
+        ]
+        gates = {r["gate"] for r in validate_plan(ops)}
+        assert gates == {"schema", "dangling_vertex"}
+
+    def test_that_batch_still_commits_rather_than_aborting(self):
+        store = _store(self._responses())
+        operator = IngestOperator(store, embedder=FakeEmbedder())
+
+        class BadUpsert:
+            name = "test"
+            cost: dict = {}
+
+            def plan(self, events, view):
+                return [
+                    planmod.upsert_unit(
+                        scope_id="s1", title="", ref="a", embed_text="x"
+                    ),
+                    planmod.append_field_value(
+                        ref="a", field="f", value="v", valid_from="t"
+                    ),
+                    planmod.upsert_unit(
+                        scope_id="s1", title="Good", ref="g", embed_text="y"
+                    ),
+                ]
+
+        result = operator.ingest([_event()], strategy=BadUpsert())
+        assert result.committed, result.aborted_reason
+        assert len(result.rejected) == 2
+        assert result.delta.units_created == 1
+
+    def test_split_topic_ops_are_applied_not_silently_dropped(self):
+        """The agentic split_topic tool emits these. Without an apply branch the
+        tool reported success to the model and did nothing."""
+        responses = self._responses() + [(r"^SELECT nextval", [(1,)])]
+        store = _store(responses)
+        operator = IngestOperator(store, embedder=FakeEmbedder())
+
+        class Splits:
+            name = "test"
+            cost: dict = {}
+
+            def plan(self, events, view):
+                return [
+                    planmod.split_topic(
+                        unit_id=3, fields=["deadline"], new_title="Deadlines"
+                    )
+                ]
+
+        result = operator.ingest([_event()], strategy=Splits())
+        assert result.committed, result.aborted_reason
+        assert store.conn.ran(r"INSERT INTO gem_unit")
+        assert store.conn.ran(r"UPDATE gem_field_value SET unit_id")
+        # parent -> child, so revision walks out-edges
+        params = next(p for sql, p in store.conn.statements if "gph_insert_edge" in sql)
+        assert params[0] == 3, "the split edge must be oriented parent -> child"
 
     def test_a_multi_scope_batch_is_refused(self):
         operator = IngestOperator(_store(), embedder=FakeEmbedder())
@@ -1054,6 +1157,48 @@ class TestPolicyRegistry:
         with store.transition("ingest", "s1", "construction") as tx:
             pass
         assert tx.policies_evaluated == []
+
+    def test_dependents_flagged_checks_out_from_what_CHANGED(self):
+        """Regression: the condition read delta.propagated_units — the units it
+        just FLAGGED — and demanded their out-neighbours be flagged too. That is
+        one hop further than ingest ever flags, so the default
+        propagate-on-change policy aborted every ingest on any A->B->C extension
+        chain. It must read tx.changed_units instead."""
+        engine = PolicyEngine(extra=seed_policies())
+        store = _store(
+            [
+                # No unflagged dependent of the CHANGED unit.
+                (r"count\(\*\) FROM gem_unit u JOIN gem_edge", [(0,)]),
+                (r"^SELECT nextval", [(1,)]),
+                (r"RETURNING t", [(1,)]),
+            ],
+            hook=engine.evaluate,
+        )
+        with store.transition("ingest", "s1", "construction") as tx:
+            tx.changed_units.append(1)  # A changed
+            tx.delta.propagated_units.append(2)  # B was flagged
+        assert "propagate-on-change" in tx.policies_evaluated
+        # the condition must be asked about the CHANGED unit, not the flagged one
+        params = next(
+            p
+            for sql, p in store.conn.statements
+            if "JOIN gem_edge e ON e.dst = u.id" in sql
+        )
+        assert params[0] == [1], "the C3 condition looked at the wrong units"
+
+    def test_dependents_flagged_still_rejects_a_genuinely_unflagged_dependent(self):
+        engine = PolicyEngine(extra=seed_policies())
+        store = _store(
+            [
+                (r"count\(\*\) FROM gem_unit u JOIN gem_edge", [(1,)]),
+                (r"^SELECT nextval", [(1,)]),
+            ],
+            audit=FakeConn([(r"RETURNING t", [(1,)])]),
+            hook=engine.evaluate,
+        )
+        with pytest.raises(PolicyViolation, match="propagate-on-change"):
+            with store.transition("ingest", "s1", "construction") as tx:
+                tx.changed_units.append(1)
 
     def test_seed_policies_cover_the_listing_1_rules(self):
         names = {p.name for p in seed_policies(max_active_units=100)}

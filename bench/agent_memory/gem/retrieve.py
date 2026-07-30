@@ -89,10 +89,13 @@ class RetrieveOperator:
                     # C6, in the same transaction as the read.
                     hits = self._reinforce(tx, query, hits)
 
-                delta = tx.delta.freeze()
-                cost = tx.meter.freeze(time.perf_counter() - started)
-                transition_id = tx.transition_id
-                policies = tuple(tx.policies_evaluated)
+            # Captured AFTER the envelope closes: transition() samples the C5
+            # counts, evaluates P_t, and writes the log during __exit__, so
+            # anything read inside the body is stale.
+            delta = tx.delta.freeze()
+            cost = tx.meter.freeze(time.perf_counter() - started)
+            transition_id = tx.transition_id
+            policies = tuple(tx.policies_evaluated)
         except Exception as exc:  # noqa: BLE001 — reported, not swallowed
             return RetrievalResult(
                 operator="retrieve",

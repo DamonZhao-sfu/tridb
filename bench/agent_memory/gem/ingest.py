@@ -78,16 +78,27 @@ def validate_plan(ops: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     4. enum conformance — ``edge_kind`` is one of the two native kinds.
     """
     rejections: list[dict[str, Any]] = []
-    defined_refs = {
-        op.get("ref")
-        for op in ops
-        if op.get("kind") == planmod.UPSERT_UNIT and op.get("ref")
-    }
 
     def reject(index: int, op: Mapping[str, Any], gate: str, detail: str) -> None:
         rejections.append(
             {"index": index, "kind": op.get("kind"), "gate": gate, "detail": detail}
         )
+
+    # A ref only counts as defined if the upsert that declares it SURVIVES its
+    # own gates. Building this from every upsert would let a dependent op pass
+    # the dangling-vertex gate, reach apply, and fail to resolve there — which
+    # raises out of the transition and rolls back the whole batch, breaking the
+    # per-op rejection contract this function promises.
+    defined_refs: set[str] = set()
+    for index, op in enumerate(ops):
+        if op.get("kind") != planmod.UPSERT_UNIT or not op.get("ref"):
+            continue
+        if (
+            op.get("scope_id")
+            and op.get("title")
+            and (op.get("embedding") is not None or op.get("embed_text"))
+        ):
+            defined_refs.add(str(op["ref"]))
 
     for index, op in enumerate(ops):
         kind = op.get("kind")
@@ -208,6 +219,16 @@ class IngestOperator:
             if op["edge_kind"] == EdgeKind.EXTENSION.value:
                 linked_sources.append(src)
 
+        for op in ops:
+            if op.get("kind") != planmod.SPLIT_TOPIC:
+                continue
+            new_id = self._apply_split(tx, op, scope_id=scope_id)
+            if new_id is not None:
+                if op.get("ref"):
+                    resolved[str(op["ref"])] = new_id
+                touched.append(new_id)
+                linked_sources.append(int(op["unit_id"]))
+
         # C3 hook ([GEM] Alg. 1 line 4): a unit that just gained an extension
         # out-edge has dependents that may now need re-evaluating. Flag them for
         # `revise`; ingest never propagates itself, because propagation is a
@@ -215,6 +236,51 @@ class IngestOperator:
         flagged = self._flag_for_revision(tx, linked_sources)
 
         return {"resolved": resolved, "touched": touched, "flagged": flagged}
+
+    def _apply_split(
+        self, tx: Tx, op: Mapping[str, Any], *, scope_id: str
+    ) -> int | None:
+        """Promote a field subset into a standalone unit ([GEM] Figure 3).
+
+        Reachable from ``AgenticIngest``'s ``split_topic`` tool. Without this
+        branch the tool would report success to the model and do nothing — a
+        no-op counted as a write, which is the worst of both.
+
+        Idempotent: an existing unit with the target title means the split
+        already happened, and re-running must not fork a second copy.
+        """
+        parent = int(op["unit_id"])
+        fields = [str(f) for f in (op.get("fields") or [])]
+        if not fields:
+            return None
+        title = str(op.get("new_title") or f"split@{parent}")
+
+        existing = tx.execute(
+            "SELECT id FROM gem_unit WHERE scope_id = %s AND title = %s",
+            (scope_id, title),
+        ).fetchone()
+        if existing is not None:
+            return int(existing[0])
+
+        new_id = tx.allocate_vertex()
+        tx.execute(
+            "INSERT INTO gem_unit (id, scope_id, title, summary, embedding,"
+            " metadata) SELECT %s, %s, %s, %s, embedding,"
+            " jsonb_build_object('split_from', %s::bigint, 'fields',"
+            " %s::text[]) FROM gem_unit WHERE id = %s",
+            (new_id, scope_id, title, f"split of {parent}", parent, fields, parent),
+        )
+        tx.delta.units_created += 1
+        tx.execute(
+            "UPDATE gem_field_value SET unit_id = %s WHERE unit_id = %s"
+            "  AND field = ANY(%s)",
+            (new_id, parent, fields),
+        )
+        # The parent entails the promoted unit: a change in the parent topic
+        # requires re-evaluating it. Oriented parent -> child so revision walks
+        # out-edges (interface §6.4).
+        self.store.link(tx, parent, new_id, kind="extension", rel="split_of")
+        return new_id
 
     @staticmethod
     def _target(
@@ -351,7 +417,9 @@ class IngestOperator:
                 provenance.get("prompt_version"),
                 provenance.get("confidence"),
                 provenance.get("operator") or tx.operator,
-                provenance.get("transition_id"),
+                # C4: the transition that committed this value. Reserved at the
+                # top of the envelope precisely so it is available here.
+                provenance.get("transition_id") or tx.transition_id,
             ),
         ).fetchone()
         new_id = int(row[0])
@@ -383,6 +451,9 @@ class IngestOperator:
             (list({int(s) for s in sources}),),
         ).fetchall()
         flagged = sorted(int(row[0]) for row in rows)
+        # The seeds, not the flagged set — the C3 postcondition checks one hop
+        # OUT from what changed (see policy._dependents_flagged).
+        tx.changed_units.extend(sorted({int(s) for s in sources}))
         if flagged:
             tx.execute(
                 "UPDATE gem_unit SET metadata = jsonb_set(metadata,"
@@ -454,10 +525,14 @@ class IngestOperator:
                 applied = self.apply(tx, accepted, scope_id=scope_id)
                 units = tuple(applied["touched"])
                 rejections = [*strategy_rejections, *rejections]
-                delta = tx.delta.freeze()
-                cost = tx.meter.freeze(time.perf_counter() - started)
-                transition_id = tx.transition_id
-                policies = tuple(tx.policies_evaluated)
+
+            # Captured AFTER the envelope closes: transition() samples the C5
+            # counts, evaluates P_t, and writes the log during __exit__, so
+            # anything read inside the body is stale.
+            delta = tx.delta.freeze()
+            cost = tx.meter.freeze(time.perf_counter() - started)
+            transition_id = tx.transition_id
+            policies = tuple(tx.policies_evaluated)
         except Exception as exc:  # noqa: BLE001 — reported, not swallowed
             return IngestResult(
                 operator="ingest",
