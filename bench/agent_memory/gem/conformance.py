@@ -210,6 +210,7 @@ def check_c3(memory: Any, scope_id: str) -> ConditionResult:
         " JOIN gem_unit src ON src.id = e.src"
         " WHERE u.scope_id = %s AND e.kind = 'extension' AND e.tombstoned_at IS NULL"
         "   AND src.metadata->>'changed' = 'true'"
+        "   AND COALESCE(u.metadata->>'changed', 'false') <> 'true'"
         "   AND COALESCE(u.metadata->>'needs_revision','false') <> 'true'",
         (scope_id,),
     ).fetchone()[0]

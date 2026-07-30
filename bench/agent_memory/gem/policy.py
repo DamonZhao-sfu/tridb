@@ -94,8 +94,12 @@ def _dependents_flagged(tx: Tx, params: Mapping[str, Any]) -> bool:
         "SELECT count(*) FROM gem_unit u JOIN gem_edge e ON e.dst = u.id"
         " WHERE e.src = ANY(%s) AND e.kind = 'extension'"
         "   AND e.tombstoned_at IS NULL"
+        # A dependent that is itself direct revision evidence is already being
+        # re-evaluated in this transition; requiring it to remain flagged would
+        # make two changed classes connected by an extension edge fail C3.
+        "   AND NOT (u.id = ANY(%s))"
         "   AND COALESCE(u.metadata->>'needs_revision', 'false') <> 'true'",
-        (changed,),
+        (changed, changed),
     ).fetchone()
     return row is None or int(row[0]) == 0
 

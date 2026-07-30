@@ -276,6 +276,17 @@ class ReviseOperator:
         # The seeds are what CHANGED; the reach set is what gets flagged. The
         # C3 postcondition needs the former (see policy._dependents_flagged).
         tx.changed_units.extend(int(seed) for seed in seeds)
+        # Persist the revision source as trajectory evidence. The conformance
+        # report runs after the transition has closed, when `tx.changed_units`
+        # no longer exists; without this marker it cannot independently check
+        # that every direct extension dependent of a genuinely changed unit
+        # was flagged. The marker is provenance metadata, not propagation
+        # state, so unlike `needs_revision` it is intentionally not cleared.
+        tx.execute(
+            "UPDATE gem_unit SET metadata = jsonb_set(metadata,"
+            " '{changed}', 'true'::jsonb) WHERE id = ANY(%s)",
+            (list(int(seed) for seed in seeds),),
+        )
 
         repairs: list[Mapping[str, Any]] = []
         for seed in seeds:
@@ -401,6 +412,15 @@ class ReviseOperator:
             # topic requires re-evaluating the promoted one. Orientation is
             # parent -> child so revision walks out-edges (interface §6.4).
             self.store.link(tx, parent, new_id, kind="extension", rel="split_of")
+            # Splitting runs after the propagation walk. If the parent is one
+            # of this transition's changed seeds, its newly entailed child
+            # still has to be flagged before the C3 commit postcondition runs.
+            tx.execute(
+                "UPDATE gem_unit SET metadata = jsonb_set(metadata,"
+                " '{needs_revision}', 'true'::jsonb) WHERE id = %s",
+                (new_id,),
+            )
+            tx.delta.propagated_units.append(new_id)
             dirty.add(new_id)
             dirty.add(parent)
             repairs.append(
