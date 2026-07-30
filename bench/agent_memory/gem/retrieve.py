@@ -125,8 +125,12 @@ class RetrieveOperator:
         if query.embedding is not None:
             return [float(value) for value in query.embedding]
         if query.text is None:
-            if query.mode is RetrievalMode.RELATIONAL:
-                return None  # a pure relational/temporal lookup needs no vector
+            # Two modes have no vector leg at all: a pure relational lookup, and
+            # a pure GRAPH traversal, which starts from an explicit anchor and
+            # never ranks by similarity. Demanding a vector from them made the
+            # whole GRAPH mode unreachable without one.
+            if query.mode in (RetrievalMode.RELATIONAL, RetrievalMode.GRAPH):
+                return None
             raise ValueError("query needs text or embedding for a vector leg")
         if self.embedder is None:
             raise RuntimeError("no embedder configured for query text")

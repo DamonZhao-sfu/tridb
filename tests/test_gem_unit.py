@@ -993,6 +993,42 @@ class TestRetrieveOperator:
         assert sql.count("%s") == len(params) == 1
         assert params[0] == "s1"
 
+    def test_graph_mode_needs_no_query_vector(self):
+        """Regression: GRAPH is a pure traversal from an explicit anchor and
+        never ranks by similarity, but the vector check treated it like the
+        vector modes — which made the whole mode unreachable without a vector."""
+        responses = self._responses() + [
+            (r"gph_traverse_bfs", [(2,), (3,)]),
+            (r"^SELECT nextval", [(1,)]),
+        ]
+        operator, store = self._operator(responses)
+        result = operator.retrieve(
+            Query(
+                scope_id="s1",
+                mode=RetrievalMode.GRAPH,
+                anchor_id=5,
+                hops=3,
+                reinforce=False,
+            )
+        )
+        assert result.committed, result.aborted_reason
+        assert store.conn.ran(r"gph_traverse_bfs")
+        assert result.probes["mode"] == "graph"
+
+    def test_graph_mode_one_hop_uses_the_typed_traversal(self):
+        responses = self._responses() + [
+            (r"gph_traverse_typed", [(2,)]),
+            (r"^SELECT nextval", [(1,)]),
+        ]
+        operator, store = self._operator(responses)
+        result = operator.retrieve(
+            Query(scope_id="s1", mode=RetrievalMode.GRAPH, anchor_id=5, reinforce=False)
+        )
+        assert result.committed, result.aborted_reason
+        # target-list (ProjectSet) position: a FROM-clause FunctionScan loses
+        # early termination under LIMIT (TR-1)
+        assert store.conn.ran(r"SELECT \(e\).dst FROM \(SELECT")
+
     def test_structural_route_requires_an_anchor(self):
         operator, _ = self._operator()
         result = operator.retrieve(
