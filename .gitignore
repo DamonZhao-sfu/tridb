@@ -11,6 +11,10 @@ __pycache__/
 /build/
 *.o
 *.so
+# LLVM bitcode emitted by PGXS when the toolchain has LLVM JIT enabled. Same
+# category as *.o/*.so; two .bc files were already tracked before this rule and
+# are left alone (gitignore does not untrack) — removing them is a separate call.
+*.bc
 
 # Data / corpora
 /data/

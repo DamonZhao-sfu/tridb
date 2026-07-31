@@ -297,3 +297,145 @@ def test_backend_search_pushes_scope_predicate_into_sql():
     assert params[-1] == 3
     assert hits[0].external_id == "D1:1"
     assert hits[0].score == 0.75
+
+
+# ---------------------------------------------------------------------------
+# Native-graph surface (opt-in graph=True). These cover the wiring off-Postgres;
+# the id == vid contract, the graph lift, tenant isolation and scope-filter
+# quoting are additionally exercised live against the engine.
+# ---------------------------------------------------------------------------
+
+
+class GraphCursor(FakeCursor):
+    """FakeCursor plus the fetchone() the graph helpers use."""
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+
+class FakeGraphConnection:
+    """Minimal stand-in that answers the graph helper queries."""
+
+    def __init__(self):
+        self.calls = []
+        self.allocated = 0
+
+    def execute(self, sql, params=None):
+        self.calls.append((sql, params))
+        if "gph_allocated_vids" in sql:
+            nid = self.allocated
+            self.allocated += 1
+            return GraphCursor([(nid,)])
+        if "gph_upsert_vertex" in sql:
+            return GraphCursor([(params[0],)])  # identity: no drift
+        if "register_edge_type" in sql:
+            return GraphCursor([(4,)])
+        if "SELECT id FROM graph_store.edge_type" in sql:
+            return GraphCursor([(4,)])
+        if "gph_traverse_typed" in sql:
+            return GraphCursor([(2,)])
+        if "tjs_open(" in sql:
+            return GraphCursor([(2,), (1,)])
+        if "tjs_open_candidates_examined" in sql:
+            return GraphCursor([(11, 3, False, "term_cond", None, 1)])
+        if "SELECT id, scope_id" in sql:
+            return GraphCursor(
+                [
+                    (
+                        2,
+                        "scope-a",
+                        "e:berlin",
+                        None,
+                        "entity",
+                        None,
+                        "Berlin",
+                        None,
+                        0,
+                        {},
+                    )
+                ]
+            )
+        return GraphCursor()
+
+    def transaction(self):
+        connection = self
+
+        class _Txn:
+            def __enter__(self):
+                connection.calls.append(("BEGIN", None))
+                return connection
+
+            def __exit__(self, *exc):
+                connection.calls.append(("COMMIT", None))
+                return False
+
+        return _Txn()
+
+    # psycopg's sql.Literal(...).as_string(conn) needs these on the adapted conn
+    @property
+    def info(self):
+        raise AttributeError
+
+
+def test_graph_methods_refuse_when_graph_mode_is_off():
+    backend = TriDBMemoryBackend(FakeGraphConnection(), dim=2)
+    for call in (
+        lambda: backend.link(1, 2, "moved_to"),
+        lambda: backend.neighbors(1),
+        lambda: backend.graph_stats(),
+        lambda: backend.search_fused("s", query_embedding=[1.0, 0.0]),
+        lambda: backend.add_units("s", []),
+    ):
+        try:
+            call()
+        except RuntimeError as exc:
+            assert "graph mode is off" in str(exc)
+        else:  # pragma: no cover - the assertion below reports the failure
+            raise AssertionError("graph method did not refuse with graph=False")
+
+
+def test_add_units_allocates_ids_from_the_graph_not_the_identity_sequence():
+    conn = FakeGraphConnection()
+    backend = TriDBMemoryBackend(conn, dim=2, graph=True)
+    from bench.agent_memory.backend import MemoryUnit
+
+    units = [
+        MemoryUnit(scope_id="s", external_id="a", content="a", embedding=[1.0, 0.0]),
+        MemoryUnit(scope_id="s", external_id="b", content="b", embedding=[0.0, 1.0]),
+    ]
+    ids = backend.add_units("s", units)
+    assert ids == [0, 1]  # dense vids, so id == vid holds for tjs_open
+    inserts = [sql for sql, _ in conn.calls if sql.startswith("INSERT INTO")]
+    assert len(inserts) == 2
+    assert " id, scope_id," in inserts[0]  # id is written explicitly
+
+
+def test_add_units_aborts_on_vid_drift():
+    class DriftingConnection(FakeGraphConnection):
+        def execute(self, sql, params=None):
+            if "gph_upsert_vertex" in sql:
+                return GraphCursor(
+                    [(params[0] + 1,)]
+                )  # engine handed back a different vid
+            return super().execute(sql, params)
+
+    from bench.agent_memory.backend import MemoryUnit
+
+    backend = TriDBMemoryBackend(DriftingConnection(), dim=2, graph=True)
+    unit = MemoryUnit(scope_id="s", external_id="a", content="a", embedding=[1.0, 0.0])
+    try:
+        backend.add_units("s", [unit])
+    except RuntimeError as exc:
+        assert "dense-id drift" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("a drifting vid must abort the insert")
+
+
+def test_neighbors_uses_outgoing_direction_and_projectset_position():
+    conn = FakeGraphConnection()
+    backend = TriDBMemoryBackend(conn, dim=2, graph=True)
+    backend.neighbors(1, rel="moved_to")
+    traversal = [sql for sql, _ in conn.calls if "gph_traverse_typed" in sql][-1]
+    # (src, type_id, direction=0 out, source_id=-1 unscoped); in/both RAISE today
+    assert "%s, %s, 0, -1" in traversal
+    assert traversal.startswith("SELECT (e).dst FROM (SELECT")
