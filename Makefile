@@ -1,4 +1,4 @@
-.PHONY: test lint gem-demo-fetch gem-demo graph-test stock-graph-test stock-crash-test stock-dump-restore-test stock-upgrade-test stock-writer-lock-test stock-release-smoke tjs-parity-test smoke-test test-all baseline-up baseline-down seed bench bench-live sweep sm2 fetch-dataset bench-public bench-repro fetch-hotpot graphrag graphrag-live bench-filtered ablation recall-decay tjs-open-ref tjs-open-live graphrag-h2h rabitq-sim gpu-build-index gpu-setup gpu-verify gpu-lock wiki-fetch wiki-extract wiki-scale wiki-neo4j wiki-subgraph wiki-linkpred mcp-demo agent-memory-test agent-memory-lme-smoke agent-memory-lme agent-memory-locomo lock clean clean-data
+.PHONY: test lint gem-demo-fetch gem-demo graph-test stock-graph-test stock-crash-test stock-dump-restore-test stock-upgrade-test stock-writer-lock-test stock-release-smoke tjs-parity-test smoke-test test-all baseline-up baseline-down seed bench bench-live sweep sm2 fetch-dataset bench-public bench-repro fetch-hotpot graphrag graphrag-live bench-filtered ablation recall-decay tjs-open-ref tjs-open-live graphrag-h2h rabitq-sim gpu-build-index gpu-setup gpu-verify gpu-lock wiki-fetch wiki-extract wiki-scale wiki-neo4j wiki-subgraph wiki-linkpred mcp-demo agent-memory-test agent-memory-lme-smoke agent-memory-lme agent-memory-locomo gem-bench-smoke gem-bench lock clean clean-data
 
 PUBLIC_DATASET ?= gist-960-euclidean
 
@@ -499,7 +499,8 @@ mcp-demo:
 AGENT_MEMORY_SRC := bench/agent_memory
 AGENT_MEMORY_TESTS := tests/test_agent_memory_adapters.py \
                       tests/test_longmemeval_pipeline.py \
-                      tests/test_locomo_pipeline.py
+                      tests/test_locomo_pipeline.py \
+                      tests/test_gem_bench.py
 LME_INPUT ?= data/longmemeval/memoryagentbench_longmemeval_sstar.json
 LME_OUT ?= bench/out/longmemeval_tridb
 LOCOMO_INPUT ?= data/locomo/locomo10.json
@@ -513,7 +514,7 @@ agent-memory-test:
 # One sample, one question, no judge — proves the endpoints, the schema bootstrap,
 # and the artifact contract before committing to a 300-question run.
 agent-memory-lme-smoke:
-	$(PY) -m bench.agent_memory.longmemeval_pipeline \
+	$(PY) -m bench.agent_memory.tridbBackend.longmemeval_pipeline \
 	  --input $(LME_INPUT) --output-dir $(LME_OUT)_smoke \
 	  --limit-samples 1 --limit-questions 1 --skip-judge
 
@@ -521,16 +522,52 @@ agent-memory-lme-smoke:
 # MemoryAgentBench GPT-4o protocol and needs OPENAI_API_KEY; a local judge is a
 # protocol VARIANT and must not be reported as paper-equivalent.
 agent-memory-lme:
-	$(PY) -m bench.agent_memory.longmemeval_pipeline \
+	$(PY) -m bench.agent_memory.tridbBackend.longmemeval_pipeline \
 	  --input $(LME_INPUT) --output-dir $(LME_OUT) --top-k 10
 
 agent-memory-locomo:
-	$(PY) -m bench.agent_memory.locomo_pipeline \
+	$(PY) -m bench.agent_memory.tridbBackend.locomo_pipeline \
 	  --input $(LOCOMO_INPUT) \
 	  --retrieval-output $(LOCOMO_OUT)_retrieval.json \
 	  --output $(LOCOMO_OUT).json \
 	  --metrics-output $(LOCOMO_OUT)_metrics.json \
 	  --top-k 20 --workers 4
+
+# --- GEM paper reproduction: [AM] arXiv:2606.06448 §4.1, §4.2, §4.8 ----------
+# Runs the TriDB/GEM arms ONLY; the paper's other nine memory systems are not
+# reproduced, and §4.7 is out of scope. Needs a live TriDB, both vLLM endpoints
+# (scripts/serve_longmemeval_vllm.sh: answer :8000, embedding :8001) and
+# `pip install -r requirements-agent-memory.txt`. Energy columns additionally
+# need nvidia-ml-py; without it every gpu_joules stays NULL and the run still
+# completes.
+#
+# The database must be SEPARATE from gem_demo: this runs at the paper's
+# Qwen3-Embedding-0.6B dimension (1024) and gem_unit.embedding is fixed at
+# whatever dimension first created it (gem_demo is vector(384)). GemStore
+# refuses the mismatch loudly rather than corrupting the store.
+#   createdb gem_bench
+GEM_BENCH_DSN ?= postgresql://hza214@127.0.0.1:55432/gem_bench
+GEM_BENCH_OUT ?= bench/out/gem_longmemeval
+
+# One history, one question, no judge, no energy — proves the endpoints, the
+# schema bootstrap and the artifact contract before committing to a run whose
+# agentic arm is measured in hours.
+gem-bench-smoke:
+	$(PY) -m bench.agent_memory.gem_bench \
+	  --input $(LME_INPUT) --output-dir $(GEM_BENCH_OUT)_smoke \
+	  --dsn $(GEM_BENCH_DSN) \
+	  --points II_embedrag \
+	  --limit-samples 1 --limit-questions 1 \
+	  --skip-judge --no-energy
+
+# The paper-shaped run: 5 histories x 60 questions = 300 per arm. The judge is
+# the LOCAL answer model, which makes grading a protocol VARIANT of
+# MemoryAgentBench's hosted gpt-4o — comparable across these arms, not against
+# the paper's published accuracy.
+gem-bench:
+	$(PY) -m bench.agent_memory.gem_bench \
+	  --input $(LME_INPUT) --output-dir $(GEM_BENCH_OUT) \
+	  --dsn $(GEM_BENCH_DSN) --top-k 10
 
 # --- GEM wiki demo (docs/agent_memory_gem_wiki_demo_plan_v0.1.0.md) ----------
 # Network-gated, like fetch-dataset/fetch-hotpot: NOT run by tests or CI. Every

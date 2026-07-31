@@ -25,7 +25,7 @@ from typing import Any, Iterable, Sequence
 
 import requests
 
-from bench.agent_memory.locomo_adapter import main as locomo_retrieval_main
+from bench.agent_memory.tridbBackend.locomo_adapter import main as locomo_retrieval_main
 
 CATEGORY_NAMES = {
     1: "multi",

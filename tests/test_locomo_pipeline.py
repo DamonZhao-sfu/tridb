@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from bench.agent_memory.locomo_pipeline import (
+from bench.agent_memory.tridbBackend.locomo_pipeline import (
     build_metrics_report,
     lexical_f1,
     parse_judge_label,

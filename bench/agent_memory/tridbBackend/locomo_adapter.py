@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from bench.agent_memory.backend import (
+from bench.agent_memory.tridbBackend.backend import (
     DEFAULT_DIM,
     DEFAULT_DSN,
     DEFAULT_MODEL,

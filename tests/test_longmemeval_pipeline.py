@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-import bench.agent_memory.longmemeval_pipeline as pipeline
-from bench.agent_memory.backend import SearchHit
+import bench.agent_memory.tridbBackend.longmemeval_pipeline as pipeline
+from bench.agent_memory.tridbBackend.backend import SearchHit
 
 
 def _row(history: int, questions: int = 60) -> dict:

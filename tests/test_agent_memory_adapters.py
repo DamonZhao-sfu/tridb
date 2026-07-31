@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from bench.agent_memory.backend import SearchHit, TriDBMemoryBackend
-from bench.agent_memory.locomo_adapter import (
+from bench.agent_memory.tridbBackend.backend import SearchHit, TriDBMemoryBackend
+from bench.agent_memory.tridbBackend.locomo_adapter import (
     adapt_sample,
     build_prompt,
     build_units as build_locomo_units,
     iter_sessions,
 )
-from bench.agent_memory.longmemeval_adapter import (
+from bench.agent_memory.tridbBackend.longmemeval_adapter import (
     adapt_entry,
     build_units as build_longmemeval_units,
     retrieval_metrics,
@@ -397,7 +397,7 @@ def test_graph_methods_refuse_when_graph_mode_is_off():
 def test_add_units_allocates_ids_from_the_graph_not_the_identity_sequence():
     conn = FakeGraphConnection()
     backend = TriDBMemoryBackend(conn, dim=2, graph=True)
-    from bench.agent_memory.backend import MemoryUnit
+    from bench.agent_memory.tridbBackend.backend import MemoryUnit
 
     units = [
         MemoryUnit(scope_id="s", external_id="a", content="a", embedding=[1.0, 0.0]),
@@ -419,7 +419,7 @@ def test_add_units_aborts_on_vid_drift():
                 )  # engine handed back a different vid
             return super().execute(sql, params)
 
-    from bench.agent_memory.backend import MemoryUnit
+    from bench.agent_memory.tridbBackend.backend import MemoryUnit
 
     backend = TriDBMemoryBackend(DriftingConnection(), dim=2, graph=True)
     unit = MemoryUnit(scope_id="s", external_id="a", content="a", embedding=[1.0, 0.0])

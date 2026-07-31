@@ -9,7 +9,7 @@ the whole point of it. Milestone G2's gate is:
 If those numbers move when nothing semantic has changed, every measurement
 taken afterwards is uninterpretable — so this strategy is deliberately the
 dullest code in the package, and it shares
-:class:`~bench.agent_memory.chunking.TiktokenSentenceChunker` with the old
+:class:`~bench.agent_memory.tridbBackend.chunking.TiktokenSentenceChunker` with the old
 pipeline rather than reimplementing chunking.
 
 **Embedding source.** Here ``gem_unit.embedding`` is the CHUNK TEXT vector, not
@@ -63,7 +63,7 @@ class DeterministicIngestStrategy:
     @property
     def chunker(self) -> Any:
         if self._chunker is None:
-            from bench.agent_memory.chunking import TiktokenSentenceChunker
+            from bench.agent_memory.tridbBackend.chunking import TiktokenSentenceChunker
 
             self._chunker = TiktokenSentenceChunker(chunk_size=self.chunk_tokens)
         return self._chunker

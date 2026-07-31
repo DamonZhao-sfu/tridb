@@ -137,7 +137,7 @@ class LLMMediatedIngestStrategy:
     @property
     def chunker(self) -> Any:
         if self._chunker is None:
-            from bench.agent_memory.chunking import TiktokenSentenceChunker
+            from bench.agent_memory.tridbBackend.chunking import TiktokenSentenceChunker
 
             self._chunker = TiktokenSentenceChunker(chunk_size=self.chunk_tokens)
         return self._chunker

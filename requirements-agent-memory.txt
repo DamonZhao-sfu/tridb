@@ -26,6 +26,13 @@ nltk>=3.9
 # Hugging Face fetcher's HTTP layer.
 requests>=2.32
 
+# GPU energy telemetry for [AM] §4.2's Table 3 / Fig. 4 columns
+# (bench/agent_memory/energy.py). STRICTLY optional: without it the sampler
+# reports available=False and every gpu_joules stays NULL, which is a run with
+# three of Table 3's five columns rather than a failed run. Provides the
+# `pynvml` module; needs an NVIDIA driver, so it is not in requirements.txt.
+nvidia-ml-py>=12.0
+
 # tools/fetch_memoryagentbench_longmemeval.py — network-gated helper that pulls
 # the five-history ai-hyz/MemoryAgentBench Accurate_Retrieval slice and records
 # the source revision. Version floor matches the module's own error message.
