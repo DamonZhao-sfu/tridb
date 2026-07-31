@@ -368,7 +368,7 @@ The first adapter run may download BAAI/bge-small-en-v1.5 through fastembed. Its
 
 Point --input at the official locomo10.json:
 
-python -m bench.agent_memory.locomo_adapter \
+python -m bench.agent_memory.tridbBackend.locomo_adapter \
   --input /path/to/locomo/data/locomo10.json \
   --output bench/out/locomo_tridb_smoke.json \
   --top-k 10 \
@@ -376,10 +376,10 @@ python -m bench.agent_memory.locomo_adapter \
 
 Then run the full retrieval pass:
 
-python -m bench.agent_memory.locomo_adapter     --input /localhome/hza214/Mandol/experimental/self_host_benchmarks/locomo/data/locomo10.json    
+python -m bench.agent_memory.tridbBackend.locomo_adapter     --input /localhome/hza214/Mandol/experimental/self_host_benchmarks/locomo/data/locomo10.json    
  --output bench/out/locomo_tridb_smoke.json     --top-k 10     --limit-samples 1
 
-python -m bench.agent_memory.locomo_adapter \
+python -m bench.agent_memory.tridbBackend.locomo_adapter \
   --input /localhome/hza214/Mandol/experimental/self_host_benchmarks/locomo/data/locomo10.json \
   --output bench/out/locomo_tridb.json \
   --top-k 10
@@ -397,7 +397,7 @@ tridb_prediction; then invoke LOCOMO’s evaluator with eval_key="tridb_predicti
 
 Session-level retrieval, matching its official flat-session baseline:
 
-python -m bench.agent_memory.longmemeval_adapter \
+python -m bench.agent_memory.tridbBackend.longmemeval_adapter \
   --input /path/to/longmemeval_s.json \
   --output bench/out/longmemeval_tridb_session_smoke.jsonl \
   --granularity session \
@@ -406,7 +406,7 @@ python -m bench.agent_memory.longmemeval_adapter \
 
 Full session-level run:
 
-python -m bench.agent_memory.longmemeval_adapter \
+python -m bench.agent_memory.tridbBackend.longmemeval_adapter \
   --input /path/to/longmemeval_s.json \
   --output bench/out/longmemeval_tridb_session.jsonl \
   --granularity session \
@@ -414,7 +414,7 @@ python -m bench.agent_memory.longmemeval_adapter \
 
 Turn-level variant:
 
-python -m bench.agent_memory.longmemeval_adapter \
+python -m bench.agent_memory.tridbBackend.longmemeval_adapter \
   --input /path/to/longmemeval_s.json \
   --output bench/out/longmemeval_tridb_turn.jsonl \
   --granularity turn \
@@ -434,7 +434,7 @@ The produced JSONL can feed LongMemEval’s src/generation/run_generation.py usi
 export VLLM_BASE_URL="http://127.0.0.1:8000/v1"
 export VLLM_API_KEY="EMPTY"
 
-python -m bench.agent_memory.locomo_pipeline \
+python -m bench.agent_memory.tridbBackend.locomo_pipeline \
   --output bench/out/locomo_tridb_qwen.json \
   --metrics-output bench/out/locomo_tridb_qwen_metrics.json \
   --top-k 20
@@ -479,7 +479,7 @@ Run the exact local-judge experiment in a third terminal:
 cd /local-scratch/localhome/hza214/tridb
 export TRIDB_DSN="postgresql://$(id -un)@127.0.0.1:55432/postgres"
 
-.venv/bin/python -m bench.agent_memory.longmemeval_pipeline \
+.venv/bin/python -m bench.agent_memory.tridbBackend.longmemeval_pipeline \
   --input data/longmemeval/memoryagentbench_longmemeval_sstar.json \
   --output-dir bench/out/longmemeval_tridb_qwen32b_local_judge \
   --top-k 10 \
@@ -507,4 +507,149 @@ bench/out/longmemeval_tridb_qwen32b_local_judge/summary.json
 The local Qwen judge is a protocol variant and is not directly comparable to
 the paper's GPT-4o judge. To run the official judging protocol instead, omit
 the three `--judge-*` options above and set `OPENAI_API_KEY`.
+
+## 8. Reproduce the agent-memory characterization paper (§4.1, §4.2, §4.8)
+
+`[AM]` is **arXiv:2606.06448**, *Agent Memory: Characterization and System
+Implications of Stateful Long-Horizon Workloads*. Step 7 above runs the single
+embedRAG-shaped arm; this step runs the **GEM operating points** and emits the
+paper's three phase-cost sections. Full detail, including what is deliberately
+not claimed: `bench/agent_memory/gem_bench/README.md`.
+
+| Section | Figures | Status |
+|---|---|---|
+| §4.1 serving latency vs accuracy | Fig. 2 | reproduced, **without** the long-context arm |
+| §4.2 construction dominates | Fig. 3, Fig. 4, Table 3 | reproduced; energy needs `nvidia-ml-py` |
+| §4.8 serving latency structure | Fig. 10, Fig. 11 | reproduced |
+| §4.7 per-user footprint growth | Fig. 9 | **not reproduced** |
+
+Only TriDB/GEM arms run here. The paper's other nine memory systems are not
+reproduced, so each arm is a GEM *setting* standing in for a paradigm's cost
+shape and every record carries `paradigm_proxy: true`.
+
+### 8.1 One-time setup
+
+This runs at Qwen3-Embedding-0.6B's dimension (1024), and `gem_unit.embedding`
+is fixed at whatever dimension first created it — `gem_demo` is `vector(384)`.
+So the reproduction needs its **own database**; `GemStore.init_schema` refuses a
+mismatch loudly rather than corrupting the store.
+
+```bash
+cd /local-scratch/localhome/hza214/tridb
+createdb -h 127.0.0.1 -p 55432 gem_bench
+psql "postgresql://$(id -un)@127.0.0.1:55432/gem_bench" \
+  -c 'CREATE EXTENSION IF NOT EXISTS vector' \
+  -c 'CREATE EXTENSION IF NOT EXISTS graph_store_am' \
+  -c 'CREATE EXTENSION IF NOT EXISTS tjs_pg'
+
+# Optional: GPU energy for Table 3 / Fig. 4. Without it every gpu_joules is
+# NULL and the run still completes with three of Table 3's five columns.
+uv pip install --python .venv/bin/python nvidia-ml-py
+```
+
+The dataset and both vLLM endpoints are the same ones step 7 prepares
+(`scripts/serve_longmemeval_vllm.sh answer` on `:8000`,
+`scripts/serve_longmemeval_vllm.sh embedding` on `:8001`). The runner verifies
+each endpoint advertises exactly its expected model **before** the first
+history, rather than hours into ingest.
+
+### 8.2 Smoke test first
+
+One history, one question, no judge, no energy — proves the endpoints, the
+schema bootstrap and the artifact contract:
+
+```bash
+export TRIDB_GEM_DSN="postgresql://$(id -un)@127.0.0.1:55432/gem_bench"
+make gem-bench-smoke
+```
+
+Equivalently, spelled out:
+
+```bash
+.venv/bin/python -m bench.agent_memory.gem_bench \
+  --input data/longmemeval/memoryagentbench_longmemeval_sstar.json \
+  --output-dir bench/out/gem_longmemeval_smoke \
+  --dsn "postgresql://$(id -un)@127.0.0.1:55432/gem_bench" \
+  --points II_embedrag \
+  --limit-samples 1 --limit-questions 1 \
+  --skip-judge --no-energy
+```
+
+### 8.3 The paper-shaped run
+
+Five histories × 60 questions = **300 queries per arm**, judged by the local
+answer model:
+
+```bash
+make gem-bench
+```
+
+Equivalently:
+
+```bash
+.venv/bin/python -m bench.agent_memory.gem_bench \
+  --input data/longmemeval/memoryagentbench_longmemeval_sstar.json \
+  --output-dir bench/out/gem_longmemeval \
+  --dsn "postgresql://$(id -un)@127.0.0.1:55432/gem_bench" \
+  --top-k 10 --max-prompt-memories 5 \
+  --answer-base-url http://127.0.0.1:8000/v1 \
+  --answer-model Qwen/Qwen3-32B \
+  --embedding-base-url http://127.0.0.1:8001/v1 \
+  --embedding-model Qwen/Qwen3-Embedding-0.6B \
+  --embedding-dim 1024
+```
+
+**Start with one arm.** The agentic arm issues an LLM call per chunk *and* per
+tool round over ~1.8 M tokens of history; [AM] measured comparable systems at
+4–14 hours on one H100. Add arms deliberately:
+
+```bash
+# one arm at a time, cheapest first
+--points II_embedrag
+--points IIIa_graphrag_like
+--points IIIb_mem0_like
+--points gem_conformant
+--points IV_agentic          # the expensive one
+```
+
+| Arm | Paradigm | ingest | mode | revise | forget | reinforce |
+|---|---|---|---|---|---|---|
+| `II_embedrag` | II | deterministic | VECTOR | off | off | off |
+| `IIIa_graphrag_like` | III.a | LLM, batched | FUSED | off | off | off |
+| `IIIb_mem0_like` | III.b | LLM, sequential | VECTOR | on | off | off |
+| `IV_agentic` | IV | agentic, capped | FUSED | on | on | off |
+| `gem_conformant` | GEM | deterministic | FUSED | on | on | on |
+
+### 8.4 Output
+
+```text
+bench/out/gem_longmemeval/
+  run_manifest.json      models, caps, energy sampler, git state
+  paper_sections.json    §4.1 / §4.2 / §4.8, one row per arm
+  report.md              the same, as Markdown tables
+  <arm>/summary.json     that arm's three sections plus raw aggregates
+  <arm>/predictions.jsonl, construction.jsonl, call_ledger.jsonl, ...
+```
+
+### 8.5 What the numbers do and do not support
+
+- The judge is the **local** answer model, so `judge_protocol` reads
+  `protocol_variant`. Accuracy is comparable across these arms and **not**
+  against [AM]'s published accuracy. For the official protocol pass
+  `--judge-base-url https://api.openai.com/v1 --judge-model gpt-4o` with
+  `JUDGE_API_KEY` set.
+- Absolute wallclock and joules are this box's, not the paper's H100. Only the
+  **spread across arms measured here** is comparable to the paper's spread.
+- An unmeasured joule is reported as `null`, never `0`; a lifecycle energy total
+  is `null` if any phase went unsampled.
+- A row labelled `IIIa_graphrag_like` **is not GraphRAG**. These rows belong
+  beside [AM]'s paradigm claims (Insight 1, 2, 8), never beside its per-system
+  bars.
+
+### 8.6 Related make targets
+
+```bash
+make agent-memory-test   # unit suite + ruff for the whole agent-memory tree
+make gem-demo            # the GEM wiki/HotpotQA demo (separate, C1-C6 evidence)
+```
 
