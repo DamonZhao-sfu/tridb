@@ -358,3 +358,16 @@ Verify id, title and venue before citing.
 | BigANN NeurIPS'23 | `big-ann-benchmarks.com/neurips23.html` | search only |
 | MAG240M | `ogb.stanford.edu/docs/lsc/mag240m/` | search only |
 | UniBench / M2Bench | PVLDB 16(4) for M2Bench | search only; both confirmed to lack a vector leg |
+
+---
+
+## Addendum 2026-08-17 — superseded on source access
+
+The PDF was subsequently supplied and read first-hand. §0 (source-access
+disclosure) and §1 (the paper, second-hand) of this document are **superseded**
+by [`baselines_vector_seeded_expansion_v0.1.0.md`](baselines_vector_seeded_expansion_v0.1.0.md)
+§0, which records what the first-hand read changed — including that the venue is
+CIDR'27, that the graph is a search tree rather than a hyperlink graph, that the
+vector predicate is a threshold rather than a top-k, and that Trellis is itself a
+federated design. The dataset survey (§2–§6) stands, with the two revisions in
+that document's §6.
