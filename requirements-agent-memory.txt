@@ -26,6 +26,11 @@ nltk>=3.9
 # Hugging Face fetcher's HTTP layer.
 requests>=2.32
 
+# Headless, publication-ready PNG/PDF rendering for [AM] Fig. 2/3/9/10/11.
+# Kept out of requirements.txt because the core database and unit suite do not
+# need a plotting stack.
+matplotlib>=3.9
+
 # GPU energy telemetry for [AM] §4.2's Table 3 / Fig. 4 columns
 # (bench/agent_memory/energy.py). STRICTLY optional: without it the sampler
 # reports available=False and every gpu_joules stays NULL, which is a run with

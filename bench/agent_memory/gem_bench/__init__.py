@@ -1,4 +1,4 @@
-"""LongMemEval_S* reproduction of [AM] §4.1, §4.2 and §4.8 on TriDB/GEM.
+"""LongMemEval_S* analogues of [AM] §4.1, §4.2, §4.7 and §4.8.
 
 [AM] is arXiv:2606.06448, "Agent Memory: Characterization and System
 Implications of Stateful Long-Horizon Workloads". It characterizes nine memory
@@ -12,7 +12,8 @@ for the paper's four construction paradigms:
           tokens, GPU energy, and joules per correct answer.
     §4.8  effective TTFT structure and QA tail width (p95/p50).
 
-    §4.7  NOT reproduced — per-user footprint scaling is out of scope.
+    §4.7  complete-session 64K..1M construction, footprint and retrieval
+          scaling, run separately by :mod:`.scaling`.
 
 Everything that is not a memory system — workload loading, streaming
 generation, TTFT timing, judging — comes from :mod:`bench.agent_memory.serving`,

@@ -1,4 +1,4 @@
-.PHONY: test lint gem-demo-fetch gem-demo graph-test stock-graph-test stock-crash-test stock-dump-restore-test stock-upgrade-test stock-writer-lock-test stock-release-smoke tjs-parity-test smoke-test test-all baseline-up baseline-down seed bench bench-live sweep sm2 fetch-dataset bench-public bench-repro fetch-hotpot graphrag graphrag-live bench-filtered ablation recall-decay tjs-open-ref tjs-open-live graphrag-h2h rabitq-sim gpu-build-index gpu-setup gpu-verify gpu-lock wiki-fetch wiki-extract wiki-scale wiki-neo4j wiki-subgraph wiki-linkpred mcp-demo agent-memory-test agent-memory-lme-smoke agent-memory-lme agent-memory-locomo gem-bench-smoke gem-bench lock clean clean-data
+.PHONY: test lint gem-demo-fetch gem-demo graph-test stock-graph-test stock-crash-test stock-dump-restore-test stock-upgrade-test stock-writer-lock-test stock-release-smoke tjs-parity-test smoke-test test-all baseline-up baseline-down seed bench bench-live sweep sm2 fetch-dataset bench-public bench-repro fetch-hotpot graphrag graphrag-live bench-filtered ablation recall-decay tjs-open-ref tjs-open-live graphrag-h2h rabitq-sim gpu-build-index gpu-setup gpu-verify gpu-lock wiki-fetch wiki-extract wiki-scale wiki-neo4j wiki-subgraph wiki-linkpred mcp-demo agent-memory-test agent-memory-lme-smoke agent-memory-lme agent-memory-locomo gem-bench-smoke gem-bench gem-bench-figures gem-bench-paper gem-scale-prepare gem-paper-smoke gem-paper-core gem-paper-scale gem-paper-export gem-paper-all gem-compare-core gem-compare-scale gem-compare-figures gem-compare-export gem-compare-all lock clean clean-data
 
 PUBLIC_DATASET ?= gist-960-euclidean
 
@@ -500,7 +500,8 @@ AGENT_MEMORY_SRC := bench/agent_memory
 AGENT_MEMORY_TESTS := tests/test_agent_memory_adapters.py \
                       tests/test_longmemeval_pipeline.py \
                       tests/test_locomo_pipeline.py \
-                      tests/test_gem_bench.py
+                      tests/test_gem_bench.py \
+                      tests/test_gem_paper_figures.py
 LME_INPUT ?= data/longmemeval/memoryagentbench_longmemeval_sstar.json
 LME_OUT ?= bench/out/longmemeval_tridb
 LOCOMO_INPUT ?= data/locomo/locomo10.json
@@ -548,6 +549,26 @@ agent-memory-locomo:
 #   createdb gem_bench
 GEM_BENCH_DSN ?= postgresql://hza214@127.0.0.1:55432/gem_bench
 GEM_BENCH_OUT ?= bench/out/gem_longmemeval
+GEM_PAPER_POINT ?= gem_conformant
+GEM_PAPER_OUT ?= bench/out/gem_paper
+GEM_FIGURE_INPUT ?= $(GEM_PAPER_OUT)
+GEM_FIGURE_OUT ?= $(GEM_FIGURE_INPUT)/figures
+GEM_SCALE_INPUTS ?= data/longmemeval/gem_scaling
+GEM_SCALE_OUT ?= bench/out/gem_scaling
+GEM_SCALE_DSN_TEMPLATE ?= $(GEM_BENCH_DSN)
+GEM_SCALE_BUDGETS ?= 65536 131072 262144 524288 1048576
+GEM_SCALE_REPEATS ?= 3
+GEM_SCALE_PROBES ?= 20
+GEM_RESULTS_OUT ?= results/agent_memory_characterization
+GEM_EXPORT_CORE ?= $(GEM_PAPER_OUT)
+GEM_EXPORT_SCALE ?= $(GEM_SCALE_OUT)/scale_results.json
+GEM_EXPORT_FIGURES ?= $(GEM_EXPORT_CORE)/figures
+GEM_COMPARE_POINTS ?= II_embedrag IIIa_graphrag_like IIIb_mem0_like gem_conformant
+GEM_COMPARE_OUT ?= bench/out/gem_four_way_full
+GEM_COMPARE_FIGURES ?= $(GEM_COMPARE_OUT)/figures
+GEM_COMPARE_II_SCALE_OUT ?= bench/out/gem_scaling_embedrag
+GEM_COMPARE_GEM_SCALE_OUT ?= bench/out/gem_scaling_gem
+GEM_COMPARE_RESULTS_OUT ?= results/agent_memory_comparison
 
 # One history, one question, no judge, no energy — proves the endpoints, the
 # schema bootstrap and the artifact contract before committing to a run whose
@@ -568,6 +589,126 @@ gem-bench:
 	$(PY) -m bench.agent_memory.gem_bench \
 	  --input $(LME_INPUT) --output-dir $(GEM_BENCH_OUT) \
 	  --dsn $(GEM_BENCH_DSN) --top-k 10
+
+# Render Fig. 2/3/10/11 from a completed run. This never contacts PostgreSQL or
+# vLLM and is therefore also the safe way to inspect historical artifacts.
+gem-bench-figures:
+	$(PY) -m bench.agent_memory.gem_bench.figures \
+	  --input-dir $(GEM_FIGURE_INPUT) --output-dir $(GEM_FIGURE_OUT) \
+	  --points $(GEM_PAPER_POINT)
+
+# One-system paper run followed by rendering. Unlike gem-bench, this does not
+# select the other paradigm proxies.
+gem-paper-core:
+	$(PY) -m bench.agent_memory.gem_bench \
+	  --input $(LME_INPUT) --output-dir $(GEM_PAPER_OUT) \
+	  --dsn $(GEM_BENCH_DSN) --top-k 10 \
+	  --points $(GEM_PAPER_POINT)
+	$(MAKE) gem-bench-figures \
+	  GEM_FIGURE_INPUT=$(GEM_PAPER_OUT) \
+	  GEM_FIGURE_OUT=$(GEM_PAPER_OUT)/figures
+
+# Backward-compatible spelling from the reproduction plan.
+gem-bench-paper: gem-paper-core
+
+# Deterministic complete-session prefixes for Fig. 9's 64K..1M x-axis.
+gem-scale-prepare:
+	$(PY) -m bench.agent_memory.gem_bench.scaling prepare \
+	  --input $(LME_INPUT) --output-dir $(GEM_SCALE_INPUTS) \
+	  --budgets $(GEM_SCALE_BUDGETS) --probe-limit $(GEM_SCALE_PROBES)
+
+# Construction + fixed retrieval probes only. For publishable physical bytes,
+# set GEM_SCALE_DSN_TEMPLATE to a distinct pre-created database per point, e.g.
+# postgresql://user@host/gem_scale_{budget_k}k_r{repeat}.
+gem-paper-scale: gem-scale-prepare
+	$(PY) -m bench.agent_memory.gem_bench.scaling run \
+	  --scale-dir $(GEM_SCALE_INPUTS) --output-dir $(GEM_SCALE_OUT) \
+	  --dsn-template '$(GEM_SCALE_DSN_TEMPLATE)' \
+	  --budgets $(GEM_SCALE_BUDGETS) --repeats $(GEM_SCALE_REPEATS) \
+	  --probe-limit $(GEM_SCALE_PROBES) --point $(GEM_PAPER_POINT)
+	$(PY) -m bench.agent_memory.gem_bench.figures \
+	  --input-dir $(GEM_FIGURE_INPUT) --output-dir $(GEM_FIGURE_OUT) \
+	  --points $(GEM_PAPER_POINT) \
+	  --scale-results $(GEM_SCALE_OUT)/scale_results.json
+
+# Two-point live check. It does not require a completed 300-query core run.
+# It still writes to the configured benchmark DB, so use a dedicated
+# GEM_SCALE_DSN_TEMPLATE when physical footprint matters.
+gem-paper-smoke:
+	$(PY) -m bench.agent_memory.gem_bench.scaling prepare \
+	  --input $(LME_INPUT) --output-dir $(GEM_SCALE_INPUTS)_smoke \
+	  --budgets 65536 131072 --probe-limit 2
+	$(PY) -m bench.agent_memory.gem_bench.scaling run \
+	  --scale-dir $(GEM_SCALE_INPUTS)_smoke \
+	  --output-dir $(GEM_SCALE_OUT)_smoke \
+	  --dsn-template '$(GEM_SCALE_DSN_TEMPLATE)' \
+	  --budgets 65536 131072 --repeats 1 --probe-limit 2 \
+	  --point $(GEM_PAPER_POINT)
+	$(PY) -m bench.agent_memory.gem_bench.figures \
+	  --scale-results $(GEM_SCALE_OUT)_smoke/scale_results.json \
+	  --output-dir $(GEM_SCALE_OUT)_smoke/figures --scale-only
+
+# Package the completed run into a small, commit-ready bundle. The large
+# LongMemEval corpus and model weights are deliberately excluded.
+gem-paper-export:
+	$(PY) -m bench.agent_memory.gem_bench.export \
+	  --core-dir $(GEM_EXPORT_CORE) \
+	  --scale-results $(GEM_EXPORT_SCALE) \
+	  --scale-input-manifest $(GEM_SCALE_INPUTS)/manifest.json \
+	  --figures-dir $(GEM_EXPORT_FIGURES) \
+	  --output-dir $(GEM_RESULTS_OUT) \
+	  --point $(GEM_PAPER_POINT)
+
+gem-paper-all: gem-paper-core
+	$(MAKE) gem-paper-scale \
+	  GEM_FIGURE_INPUT=$(GEM_PAPER_OUT) \
+	  GEM_FIGURE_OUT=$(GEM_PAPER_OUT)/figures
+	$(MAKE) gem-paper-export \
+	  GEM_EXPORT_CORE=$(GEM_PAPER_OUT) \
+	  GEM_EXPORT_FIGURES=$(GEM_PAPER_OUT)/figures
+
+# Same-harness comparison: embedRAG is a TriDB implementation; III.a/III.b are
+# explicit taxonomy proxies rather than the official GraphRAG/Mem0 packages.
+gem-compare-core:
+	$(PY) -m bench.agent_memory.gem_bench \
+	  --input $(LME_INPUT) --output-dir $(GEM_COMPARE_OUT) \
+	  --dsn $(GEM_BENCH_DSN) --top-k 10 \
+	  --points $(GEM_COMPARE_POINTS)
+
+# Figure 9 currently supports deterministic construction only, hence the two
+# honest comparison points below. Runs are serial to avoid GPU interference.
+gem-compare-scale: gem-scale-prepare
+	$(PY) -m bench.agent_memory.gem_bench.scaling run \
+	  --scale-dir $(GEM_SCALE_INPUTS) \
+	  --output-dir $(GEM_COMPARE_II_SCALE_OUT) \
+	  --dsn-template '$(GEM_SCALE_DSN_TEMPLATE)' \
+	  --budgets $(GEM_SCALE_BUDGETS) --repeats $(GEM_SCALE_REPEATS) \
+	  --probe-limit $(GEM_SCALE_PROBES) --point II_embedrag
+	$(PY) -m bench.agent_memory.gem_bench.scaling run \
+	  --scale-dir $(GEM_SCALE_INPUTS) \
+	  --output-dir $(GEM_COMPARE_GEM_SCALE_OUT) \
+	  --dsn-template '$(GEM_SCALE_DSN_TEMPLATE)' \
+	  --budgets $(GEM_SCALE_BUDGETS) --repeats $(GEM_SCALE_REPEATS) \
+	  --probe-limit $(GEM_SCALE_PROBES) --point gem_conformant
+
+gem-compare-figures:
+	$(PY) -m bench.agent_memory.gem_bench.figures \
+	  --input-dir $(GEM_COMPARE_OUT) --output-dir $(GEM_COMPARE_FIGURES) \
+	  --points $(GEM_COMPARE_POINTS) \
+	  --scale-comparison-results \
+	    $(GEM_COMPARE_II_SCALE_OUT)/scale_results.json \
+	    $(GEM_COMPARE_GEM_SCALE_OUT)/scale_results.json
+
+gem-compare-export:
+	$(PY) -m bench.agent_memory.gem_bench.comparison_export \
+	  --core-dir $(GEM_COMPARE_OUT) --figures-dir $(GEM_COMPARE_FIGURES) \
+	  --scale-results \
+	    $(GEM_COMPARE_II_SCALE_OUT)/scale_results.json \
+	    $(GEM_COMPARE_GEM_SCALE_OUT)/scale_results.json \
+	  --output-dir $(GEM_COMPARE_RESULTS_OUT) \
+	  --points $(GEM_COMPARE_POINTS)
+
+gem-compare-all: gem-compare-core gem-compare-scale gem-compare-figures gem-compare-export
 
 # --- GEM wiki demo (docs/agent_memory_gem_wiki_demo_plan_v0.1.0.md) ----------
 # Network-gated, like fetch-dataset/fetch-hotpot: NOT run by tests or CI. Every

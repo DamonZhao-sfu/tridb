@@ -508,12 +508,12 @@ The local Qwen judge is a protocol variant and is not directly comparable to
 the paper's GPT-4o judge. To run the official judging protocol instead, omit
 the three `--judge-*` options above and set `OPENAI_API_KEY`.
 
-## 8. Reproduce the agent-memory characterization paper (§4.1, §4.2, §4.8)
+## 8. Reproduce the agent-memory characterization paper (§4.1, §4.2, §4.7, §4.8)
 
 `[AM]` is **arXiv:2606.06448**, *Agent Memory: Characterization and System
 Implications of Stateful Long-Horizon Workloads*. Step 7 above runs the single
-embedRAG-shaped arm; this step runs the **GEM operating points** and emits the
-paper's three phase-cost sections. Full detail, including what is deliberately
+embedRAG-shaped arm; this step runs the **GEM operating points** and emits
+same-class metrics for one TriDB/GEM setting. Full detail, including what is deliberately
 not claimed: `bench/agent_memory/gem_bench/README.md`.
 
 | Section | Figures | Status |
@@ -521,7 +521,7 @@ not claimed: `bench/agent_memory/gem_bench/README.md`.
 | §4.1 serving latency vs accuracy | Fig. 2 | reproduced, **without** the long-context arm |
 | §4.2 construction dominates | Fig. 3, Fig. 4, Table 3 | reproduced; energy needs `nvidia-ml-py` |
 | §4.8 serving latency structure | Fig. 10, Fig. 11 | reproduced |
-| §4.7 per-user footprint growth | Fig. 9 | **not reproduced** |
+| §4.7 per-user footprint growth | Fig. 9 | implemented; separate scaling run |
 
 Only TriDB/GEM arms run here. The paper's other nine memory systems are not
 reproduced, so each arm is a GEM *setting* standing in for a paradigm's cost
@@ -631,7 +631,66 @@ bench/out/gem_longmemeval/
   <arm>/predictions.jsonl, construction.jsonl, call_ledger.jsonl, ...
 ```
 
-### 8.5 What the numbers do and do not support
+Render publication-ready PNG/PDF files from any completed run without touching
+PostgreSQL or vLLM:
+
+```bash
+make gem-bench-figures \
+  GEM_FIGURE_INPUT=bench/out/gem_conformant_full \
+  GEM_FIGURE_OUT=bench/out/gem_conformant_full/figures
+```
+
+This writes Fig. 2/3/10/11 analogues plus `figure_data.csv` and
+`plot_manifest.json`. `make gem-paper-core` runs only `gem_conformant` and then
+renders those four figures; it does not run the other proxy arms.
+
+### 8.5 Figure 9 scaling
+
+Figure 9 uses nested, complete-session prefixes at 64K, 128K, 256K, 512K and
+1M tokens. No text is repeated to fill a bucket. The runner performs
+construction and fixed retrieval probes only, and records construction time,
+model/embedding tokens, scoped logical database bytes, physical relation-size
+delta, and retrieval p50/p95:
+
+```bash
+make gem-scale-prepare
+make gem-paper-scale \
+  GEM_FIGURE_INPUT=bench/out/gem_conformant_full
+```
+
+For a scientifically usable **physical** footprint, provide a pre-created,
+empty database for every length/repeat:
+
+```bash
+make gem-paper-scale \
+  GEM_SCALE_REPEATS=3 \
+  GEM_SCALE_DSN_TEMPLATE='postgresql://user@127.0.0.1:55432/gem_scale_{budget_k}k_r{repeat}'
+```
+
+Every database needs the same three extensions as `gem_bench`. When a shared or
+non-empty database is used, `physical_isolated` is false; the plot then uses
+the scope-attributable logical footprint and does not present the physical
+delta as a per-user measurement. The full target defaults to three repeats,
+randomizes length order with a fixed seed, plots the across-repeat median, and
+uses min–max construction error bars.
+
+### 8.6 Commit-ready result snapshot
+
+Package the consolidated CSV, five PNG/PDF figure pairs, compact source JSON,
+reproduction instructions and SHA-256 manifest under `results/`:
+
+```bash
+make gem-paper-export \
+  GEM_EXPORT_CORE=bench/out/gem_conformant_full \
+  GEM_EXPORT_SCALE=bench/out/gem_scaling/scale_results.json \
+  GEM_EXPORT_FIGURES=bench/out/gem_conformant_full/figures
+```
+
+The default output is `results/agent_memory_characterization/`. The large
+LongMemEval corpus and model weights are deliberately excluded so the bundle
+is suitable for Git.
+
+### 8.7 What the numbers do and do not support
 
 - The judge is the **local** answer model, so `judge_protocol` reads
   `protocol_variant`. Accuracy is comparable across these arms and **not**
@@ -646,10 +705,13 @@ bench/out/gem_longmemeval/
   beside [AM]'s paradigm claims (Insight 1, 2, 8), never beside its per-system
   bars.
 
-### 8.6 Related make targets
+### 8.8 Related make targets
 
 ```bash
 make agent-memory-test   # unit suite + ruff for the whole agent-memory tree
+make gem-paper-smoke     # 64K/128K construction + two retrieval probes
+make gem-paper-export    # refresh results/ from completed core/scaling runs
+make gem-paper-all       # core run, scaling run, figures, results bundle
+make gem-compare-all     # four core points + embedRAG/GEM scaling comparison
 make gem-demo            # the GEM wiki/HotpotQA demo (separate, C1-C6 evidence)
 ```
-
