@@ -61,6 +61,19 @@ def test_empty_stores_names_every_zero_leg():
     assert _empty_stores(milvus=0, neo4j=3, postgres=0) == ["milvus", "postgres"]
 
 
+@pytest.mark.unit
+def test_loader_command_is_runnable_for_known_datasets():
+    """The empty-store error must name a real command, not just a diagnosis."""
+    from experiments.e0.plan_spread.live_backend import _loader_command
+
+    assert _loader_command("openevolve") == "make e0-openevolve-polyglot-load"
+    assert _loader_command("stark_prime") == "python -m tools.e0.load_polyglot all"
+    # An unknown dataset still gets something runnable, not a dead end.
+    unknown = _loader_command("some_future_dataset")
+    assert "make e0-openevolve-polyglot-load" in unknown
+    assert "python -m tools.e0.load_polyglot all" in unknown
+
+
 @pytest.mark.integration
 def test_polyglot_raises_on_empty_probe_store():
     """Regression guard for the actual v0.2 bug: constructing the backend

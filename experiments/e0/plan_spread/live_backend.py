@@ -52,6 +52,27 @@ def _empty_stores(*, milvus: int, neo4j: int, postgres: int) -> list[str]:
     return empty
 
 
+# The runnable command that (re)populates each dataset's Polyglot stores. Keyed
+# by dataset name rather than hardcoded into the guard's error message, so
+# adding a fourth E0 dataset means adding one entry here, not editing the
+# raise. See _loader_command below for the fallback when a name isn't listed.
+_POLYGLOT_LOADERS: dict[str, str] = {
+    "openevolve": "make e0-openevolve-polyglot-load",
+    "stark_prime": "python -m tools.e0.load_polyglot all",
+}
+
+
+def _loader_command(name: str) -> str:
+    """The remedy to print alongside an empty-store error: a command an
+    operator can actually run, not just a diagnosis. Falls back to listing
+    every known loader if `name` isn't in `_POLYGLOT_LOADERS` yet, so a new
+    dataset never regresses to a silent dead end.
+    """
+    if name in _POLYGLOT_LOADERS:
+        return _POLYGLOT_LOADERS[name]
+    return "; ".join(f"{n}: {cmd}" for n, cmd in _POLYGLOT_LOADERS.items())
+
+
 class PolyglotLiveDataset:
     backend_name = "polyglot_live"
     valid_for_system_latency_claims = True
@@ -99,8 +120,8 @@ class PolyglotLiveDataset:
             self.pg.close()
             self.neo_driver.close()
             raise RuntimeError(
-                f"{name}: {', '.join(empty)} store(s) hold 0 rows — this "
-                f"dataset's polyglot loader has not run against them yet"
+                f"{name}: {', '.join(empty)} store(s) hold 0 rows — run "
+                f"`{_loader_command(name)}` before constructing this backend"
             )
         query_table = pq.read_table(
             Path(spec["query_embeddings"]), columns=["query_id", "embedding"]
