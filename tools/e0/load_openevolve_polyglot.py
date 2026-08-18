@@ -18,6 +18,25 @@ TABLE = "e0_openevolve_node"
 DIM = 1024
 
 
+def _parent_map() -> dict[str, str]:
+    """node_id -> parent node_id, derived the same way as
+    tools/e0/load_tridb.py::_parent_map: `evolved_to` edges run parent -> child
+    (src_id -> dst_id), so the destination is the child. Raises if a node
+    resolves to two different parents, matching the TriDB loader's guard
+    rather than silently picking one.
+    """
+    import pyarrow.parquet as pq
+
+    edges = pq.read_table(ROOT / "edges.parquet", columns=["src_id", "dst_id"])
+    result: dict[str, str] = {}
+    for src, dst in zip(edges["src_id"].to_pylist(), edges["dst_id"].to_pylist()):
+        child, parent = str(dst), str(src)
+        previous = result.setdefault(child, parent)
+        if previous != parent:
+            raise ValueError(f"node {dst!r} has multiple parents")
+    return result
+
+
 def _vectors() -> tuple[list[str], np.ndarray]:
     import pyarrow.parquet as pq
 
@@ -83,6 +102,9 @@ def load_neo4j(*, drop: bool) -> dict[str, Any]:
     edges = pq.read_table(
         ROOT / "edges.parquet", columns=["src_id", "dst_id"]
     ).to_pylist()
+    parents = _parent_map()
+    for row in nodes:
+        row["parent_id"] = parents.get(str(row["node_id"]))
     started = time.time()
     with driver.session() as session:
         if drop:
@@ -93,7 +115,8 @@ def load_neo4j(*, drop: bool) -> dict[str, Any]:
         ).consume()
         session.run(
             f"UNWIND $rows AS r MERGE (n:{LABEL} {{node_id: r.node_id}}) "
-            "SET n.entity_type=r.entity_type, n.generation=r.generation",
+            "SET n.entity_type=r.entity_type, n.generation=r.generation, "
+            "n.parent_id=r.parent_id",
             rows=nodes,
         ).consume()
         session.run(
@@ -123,6 +146,7 @@ def load_postgres(*, drop: bool) -> dict[str, Any]:
     nodes = pq.read_table(
         ROOT / "nodes.parquet", columns=["node_id", "entity_type", "generation"]
     ).to_pylist()
+    parents = _parent_map()
     connection = psycopg.connect(
         host="127.0.0.1",
         port=5434,
@@ -139,10 +163,12 @@ def load_postgres(*, drop: bool) -> dict[str, Any]:
         cursor.execute(
             f"CREATE TABLE IF NOT EXISTS {TABLE} ("
             "node_id text PRIMARY KEY, entity_type text NOT NULL, generation integer, "
+            "parent_id text, "
             f"embedding vector({DIM}) NOT NULL)"
         )
         with cursor.copy(
-            f"COPY {TABLE} (node_id, entity_type, generation, embedding) FROM STDIN"
+            f"COPY {TABLE} (node_id, entity_type, generation, parent_id, embedding) "
+            "FROM STDIN"
         ) as copy:
             for row in nodes:
                 vector = vector_by_id[str(row["node_id"])]
@@ -152,10 +178,12 @@ def load_postgres(*, drop: bool) -> dict[str, Any]:
                         str(row["node_id"]),
                         row["entity_type"],
                         row["generation"],
+                        parents.get(str(row["node_id"])),
                         literal,
                     )
                 )
         cursor.execute(f"CREATE INDEX {TABLE}_generation ON {TABLE}(generation)")
+        cursor.execute(f"CREATE INDEX {TABLE}_parent ON {TABLE}(parent_id)")
         cursor.execute(
             f"CREATE INDEX {TABLE}_hnsw ON {TABLE} USING hnsw "
             "(embedding vector_cosine_ops) WITH (m=16, ef_construction=200)"

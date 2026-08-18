@@ -137,6 +137,8 @@ class PolyglotLiveDataset:
             norm = float(np.linalg.norm(vector)) or 1.0
             self.query_vectors[query_id] = vector / norm
 
+        self._parent_cache: dict[tuple[Any, ...], list[Any]] = {}
+
     def close(self) -> None:
         self.pg.close()
         self.neo_driver.close()
@@ -168,6 +170,21 @@ class PolyglotLiveDataset:
         )
         return [hit.id for hit in result[0]]
 
+    def _parents_of(self, anchor_ids: tuple[Any, ...]) -> list[Any]:
+        key = tuple(anchor_ids)
+        cached = self._parent_cache.get(key)
+        if cached is not None:
+            return cached
+        with self.pg.cursor() as cursor:
+            cursor.execute(
+                f"SELECT DISTINCT parent_id FROM {self.table} "
+                "WHERE node_id = ANY(%s) AND parent_id IS NOT NULL",
+                (list(anchor_ids),),
+            )
+            parents = [row[0] for row in cursor.fetchall()]
+        self._parent_cache[key] = parents
+        return parents
+
     def _predicate_sql(self, query: QuerySpec) -> tuple[str, list[Any]]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -181,6 +198,15 @@ class PolyglotLiveDataset:
         if "generation_gte" in predicate:
             clauses.append("generation >= %s")
             params.append(int(predicate["generation_gte"]))
+        if predicate.get("same_parent"):
+            parents = self._parents_of(query.anchor_ids)
+            if not parents:
+                clauses.append("FALSE")
+            else:
+                clauses.append("parent_id = ANY(%s)")
+                params.append(list(parents))
+                clauses.append("NOT (node_id = ANY(%s))")
+                params.append(list(query.anchor_ids))
         return (" AND ".join(clauses) if clauses else "TRUE"), params
 
     def _pg_filter(self, query: QuerySpec, ids: list[Any]) -> list[Any]:
@@ -228,6 +254,14 @@ class PolyglotLiveDataset:
         if "generation_gte" in predicate:
             clauses.append("b.generation >= $generation_gte")
             params["generation_gte"] = int(predicate["generation_gte"])
+        if predicate.get("same_parent"):
+            parents = self._parents_of(query.anchor_ids)
+            if not parents:
+                clauses.append("FALSE")
+            else:
+                clauses.append("b.parent_id IN $same_parents")
+                params["same_parents"] = list(parents)
+                clauses.append("NOT b.node_id IN $anchors")
         return (" AND ".join(clauses) if clauses else "TRUE"), params
 
     def _neo_reach(

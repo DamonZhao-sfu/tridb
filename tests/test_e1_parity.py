@@ -46,6 +46,40 @@ def test_polyglot_returns_nonempty_on_openevolve():
     assert nonempty > 0, "every OpenEvolve query still returns an empty result set"
 
 
+class _StubBackend:
+    table = "e0_openevolve_node"
+    _parent_cache: dict[str, list[str]] = {}
+
+    def _parents_of(self, anchor_ids):
+        return ["p1"]
+
+
+@pytest.mark.unit
+def test_polyglot_predicate_sql_honours_same_parent():
+    from experiments.e0.plan_spread.model import QuerySpec
+
+    query = QuerySpec(
+        query_id="q",
+        dataset="openevolve",
+        query_text="t",
+        anchor_ids=("a1",),
+        answer_ids=("x",),
+        edge_types=("evolved_to",),
+        hop_limit=2,
+        structured_predicate={"same_parent": True},
+        target_entity_type="program",
+        template="t",
+        annotation_status="s",
+        require_each_anchor=False,
+    )
+    from experiments.e0.plan_spread import live_backend
+
+    sql, _params = live_backend.PolyglotLiveDataset._predicate_sql(
+        _StubBackend(), query
+    )
+    assert "parent_id" in sql, f"same_parent not applied, got: {sql}"
+
+
 @pytest.mark.unit
 def test_empty_stores_names_every_zero_leg():
     """Pure decision logic, no I/O: which legs are empty given their counts."""
