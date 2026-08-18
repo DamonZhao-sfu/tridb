@@ -31,6 +31,27 @@ def _relationship(value: str) -> str:
     return _identifier(re.sub(r"[^A-Za-z0-9]+", "_", value).strip("_").lower())
 
 
+def _empty_stores(*, milvus: int, neo4j: int, postgres: int) -> list[str]:
+    """Which of the three Polyglot legs hold zero rows for this dataset.
+
+    Pure decision logic, deliberately split out of `PolyglotLiveDataset.__init__`
+    so it can be unit-tested with plain integers, with no live store required.
+    An empty leg here is indistinguishable, from the caller's side, from a
+    slow/cold index — the E0 v0.2 OpenEvolve run measured against exactly this
+    state (every leg legitimately empty, because its polyglot loader ran after
+    the measurement) and it produced 1,010 well-formed, silently empty
+    observations instead of an error.
+    """
+    empty = []
+    if milvus == 0:
+        empty.append("milvus")
+    if neo4j == 0:
+        empty.append("neo4j")
+    if postgres == 0:
+        empty.append("postgres")
+    return empty
+
+
 class PolyglotLiveDataset:
     backend_name = "polyglot_live"
     valid_for_system_latency_claims = True
@@ -49,24 +70,16 @@ class PolyglotLiveDataset:
         connections.connect(alias=f"e0_{name}", host="127.0.0.1", port="19530")
         self.collection = Collection(str(live["milvus_collection"]), using=f"e0_{name}")
         self.collection.load()
-        if self.collection.num_entities == 0:
-            raise RuntimeError(
-                f"{name}: milvus collection {live['milvus_collection']!r} holds 0 "
-                f"rows — its polyglot loader has not run against this store yet"
-            )
+        milvus_count = self.collection.num_entities
+
         self.neo_driver = GraphDatabase.driver(
             "bolt://127.0.0.1:7688", auth=("neo4j", "testpassword")
         )
         with self.neo_driver.session() as session:
-            node_count = session.run(
+            neo4j_count = session.run(
                 f"MATCH (n:{self.label}) RETURN count(n) AS n"
             ).single()["n"]
-        if node_count == 0:
-            self.neo_driver.close()
-            raise RuntimeError(
-                f"{name}: neo4j label {self.label!r} holds 0 nodes — its "
-                f"polyglot loader has not run against this store yet"
-            )
+
         self.pg = psycopg.connect(
             host="127.0.0.1",
             port=5434,
@@ -77,13 +90,17 @@ class PolyglotLiveDataset:
         )
         with self.pg.cursor() as cursor:
             cursor.execute(f"SELECT count(*) FROM {self.table}")
-            row_count = cursor.fetchone()[0]
-        if row_count == 0:
+            postgres_count = cursor.fetchone()[0]
+
+        empty = _empty_stores(
+            milvus=milvus_count, neo4j=neo4j_count, postgres=postgres_count
+        )
+        if empty:
             self.pg.close()
             self.neo_driver.close()
             raise RuntimeError(
-                f"{name}: postgres table {self.table!r} holds 0 rows — its "
-                f"polyglot loader has not run against this store yet"
+                f"{name}: {', '.join(empty)} store(s) hold 0 rows — this "
+                f"dataset's polyglot loader has not run against them yet"
             )
         query_table = pq.read_table(
             Path(spec["query_embeddings"]), columns=["query_id", "embedding"]

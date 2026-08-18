@@ -4,10 +4,30 @@ from pathlib import Path
 
 import pytest
 
+# Throwaway names for the guard integration test below. Deliberately distinct
+# from any `e0_*` collection/label/table: a live E1 measurement can be running
+# against those at any time (see PolyglotLiveDataset in live_backend.py), and
+# this test must never touch them.
+_PROBE_COLLECTION = "e1_guard_probe"
+_PROBE_LABEL = "E1GuardProbe"
+_PROBE_TABLE = "e1_guard_probe"
+
 
 @pytest.mark.integration
 def test_polyglot_returns_nonempty_on_openevolve():
-    """Regression: the E0 v0.2 run produced empty result_ids on all 1010 OE cells."""
+    """Green smoke check, not a regression guard for the v0.2 bug.
+
+    The E0 v0.2 run produced empty result_ids on all 1010 OE cells because its
+    polyglot stores were legitimately empty at measurement time (the
+    OpenEvolve loader ran after the measurement — see
+    results/e0/plan_space/polyglot_live_v0.2/run_manifest.json vs
+    data/e0/openevolve_polyglot_load.json timestamps). It was never a
+    live_backend.py composition-logic bug: this test passes unmodified,
+    with no code change, once the stores are loaded — which disproved that
+    hypothesis rather than confirming it. See
+    test_polyglot_raises_on_empty_probe_store below for the actual
+    regression guard.
+    """
     from experiments.e0.plan_spread.config import load_config
     from experiments.e0.plan_spread.live_backend import PolyglotLiveDataset
     from experiments.e0.plan_spread.model import PlanSpec
@@ -26,25 +46,86 @@ def test_polyglot_returns_nonempty_on_openevolve():
     assert nonempty > 0, "every OpenEvolve query still returns an empty result set"
 
 
+@pytest.mark.unit
+def test_empty_stores_names_every_zero_leg():
+    """Pure decision logic, no I/O: which legs are empty given their counts."""
+    from experiments.e0.plan_spread.live_backend import _empty_stores
+
+    assert _empty_stores(milvus=0, neo4j=0, postgres=0) == [
+        "milvus",
+        "neo4j",
+        "postgres",
+    ]
+    assert _empty_stores(milvus=10, neo4j=0, postgres=5) == ["neo4j"]
+    assert _empty_stores(milvus=10, neo4j=3, postgres=5) == []
+    assert _empty_stores(milvus=0, neo4j=3, postgres=0) == ["milvus", "postgres"]
+
+
 @pytest.mark.integration
-def test_polyglot_raises_instead_of_silently_empty_when_store_unloaded():
-    """Regression: root cause of the v0.2 all-empty run was a load-order race —
-    `e0-plan-live` does not depend on `e0-openevolve-polyglot-load`, so the
-    measurement ran ~2 minutes before the OpenEvolve loader populated the
-    stores (see results/e0/plan_space/polyglot_live_v0.2/run_manifest.json vs
-    data/e0/openevolve_polyglot_load.json timestamps). Every leg was silently
-    empty and every query silently returned `result_ids: []`. This asserts the
-    fix: constructing the backend against an empty store now fails loudly
-    instead of producing well-formed-but-empty observations.
+def test_polyglot_raises_on_empty_probe_store():
+    """Regression guard for the actual v0.2 bug: constructing the backend
+    against a store that holds zero rows for the dataset must fail loudly
+    instead of silently succeeding (which is exactly what let the v0.2 run
+    produce 1,010 well-formed-but-empty observations with no error anywhere).
+
+    Uses dedicated, disposable `e1_guard_probe` / `E1GuardProbe` objects that
+    this test creates and drops itself — never any `e0_*` collection, label,
+    or table, since a live E1 measurement can be running against those at any
+    time and a test-owned DELETE/DROP on shared fixtures is a permanent
+    hazard if interrupted mid-flight.
     """
     import psycopg
+    from pymilvus import (
+        Collection,
+        CollectionSchema,
+        DataType,
+        FieldSchema,
+        connections,
+        utility,
+    )
+
     from experiments.e0.plan_spread.config import load_config
     from experiments.e0.plan_spread.live_backend import PolyglotLiveDataset
-    from tools.e0.load_openevolve_polyglot import load_postgres
 
     config = load_config(Path("configs/e0/plan_space_v0.3.yaml"))
-    spec = config["datasets"]["openevolve"]
-    table = spec["live"]["postgres_table"]
+    base_spec = config["datasets"]["openevolve"]
+    probe_spec = {
+        **base_spec,
+        "live": {
+            **base_spec["live"],
+            "milvus_collection": _PROBE_COLLECTION,
+            "neo4j_label": _PROBE_LABEL,
+            "postgres_table": _PROBE_TABLE,
+        },
+    }
+
+    connections.connect(alias="e1_guard_probe", host="127.0.0.1", port="19530")
+    if utility.has_collection(_PROBE_COLLECTION, using="e1_guard_probe"):
+        utility.drop_collection(_PROBE_COLLECTION, using="e1_guard_probe")
+    collection = Collection(
+        _PROBE_COLLECTION,
+        CollectionSchema(
+            [
+                FieldSchema(
+                    "node_id", DataType.VARCHAR, max_length=64, is_primary=True
+                ),
+                FieldSchema("embedding", DataType.FLOAT_VECTOR, dim=8),
+            ]
+        ),
+        using="e1_guard_probe",
+    )
+    collection.create_index(
+        "embedding",
+        {
+            "index_type": "HNSW",
+            "metric_type": "COSINE",
+            "params": {"M": 16, "efConstruction": 64},
+        },
+    )
+    # No rows inserted into the collection, and no Neo4j nodes are ever
+    # created under E1GuardProbe — both are empty by construction. Only the
+    # postgres leg needs an explicit empty table (SELECT on a table that
+    # doesn't exist raises before our check ever runs).
 
     pg = psycopg.connect(
         host="127.0.0.1",
@@ -56,11 +137,13 @@ def test_polyglot_raises_instead_of_silently_empty_when_store_unloaded():
     )
     try:
         with pg.cursor() as cursor:
-            cursor.execute(f"DELETE FROM {table}")
-        with pytest.raises(RuntimeError, match=r"holds 0 rows"):
-            PolyglotLiveDataset("openevolve", spec)
+            cursor.execute(f"DROP TABLE IF EXISTS {_PROBE_TABLE}")
+            cursor.execute(f"CREATE TABLE {_PROBE_TABLE} (node_id text PRIMARY KEY)")
+
+        with pytest.raises(RuntimeError, match=r"milvus, neo4j, postgres"):
+            PolyglotLiveDataset("e1_guard_probe", probe_spec)
     finally:
+        with pg.cursor() as cursor:
+            cursor.execute(f"DROP TABLE IF EXISTS {_PROBE_TABLE}")
         pg.close()
-        # Restore from the same parquet source the original load used, so the
-        # fixture is byte-for-byte what it was before this test ran.
-        load_postgres(drop=True)
+        utility.drop_collection(_PROBE_COLLECTION, using="e1_guard_probe")
