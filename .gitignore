@@ -1,6 +1,7 @@
 # Python
 .venv/
 .venv-gpu/
+.venv-e0/
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -42,3 +43,7 @@ __pycache__/
 # VectorDBBench writes an empty log dir on import
 /logs/
 /vendor/
+
+# Live PostgreSQL data directory for the E0/E1 TriDB instance (4+ GB). Never commit.
+.tridb-pgdata/
+logfile
