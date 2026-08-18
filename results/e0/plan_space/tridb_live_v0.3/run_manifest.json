@@ -1,0 +1,99 @@
+{
+  "backend": "tridb_live",
+  "complete": true,
+  "config": {
+    "bytes": 2935,
+    "path": "configs/e0/plan_space_v0.3.yaml",
+    "sha256": "6bc7097416deabc06b264a2e86bb807b0fd8737e4be58a26b2fa4fe3b279f1d8"
+  },
+  "counts": {
+    "errors": 0,
+    "resumed": 0,
+    "written": 10350
+  },
+  "datasets": [
+    "stark_prime",
+    "openevolve"
+  ],
+  "environment": {
+    "created_at_utc": "2026-08-18T19:43:50.211303+00:00",
+    "cuda_visible_devices": null,
+    "git_revision": "6badc988ad24eed1d0a320875f46d7841417d298",
+    "packages": {
+      "numpy": "2.5.1",
+      "openevolve": null,
+      "pyarrow": "25.0.0",
+      "stark-qa": null
+    },
+    "platform": "Linux-6.17.0-1012-oem-x86_64-with-glibc2.39",
+    "python": "3.13.12"
+  },
+  "inputs": [
+    {
+      "bytes": 2935,
+      "path": "configs/e0/plan_space_v0.3.yaml",
+      "sha256": "6bc7097416deabc06b264a2e86bb807b0fd8737e4be58a26b2fa4fe3b279f1d8"
+    },
+    {
+      "bytes": 38873697,
+      "path": "data/e0/stark_prime/normalized/nodes.parquet",
+      "sha256": "d5ce84dc2193cc11ea5d9836bb4fdc9b847c18ad70fa646360fbc25f781538e8"
+    },
+    {
+      "bytes": 10290895,
+      "path": "data/e0/stark_prime/normalized/edges.parquet",
+      "sha256": "2b9d5fc2f5874d73081302b1bd31169c6000ee7177028c0ebffb96ee17f5a0e6"
+    },
+    {
+      "bytes": 641428569,
+      "path": "data/e0/stark_prime/normalized/embeddings.parquet",
+      "sha256": "b8f6d9926f0f2537a8fadcc00548533b236fcbc71afc706843662ca2dd785d1a"
+    },
+    {
+      "bytes": 197217,
+      "path": "data/e0/stark_prime/normalized/query_embeddings_v0.2.parquet",
+      "sha256": "ff367e47aa6966d471c8eff73fef2eef8166d4e940b92fdbe698efc4299371e5"
+    },
+    {
+      "bytes": 30141,
+      "path": "data/e0/stark_prime/normalized/queries_v0.2.jsonl",
+      "sha256": "94c481e2b8d2cc9925a5f639c8780ae6e4f2f22a64d13ef475de6caf9afeccfd"
+    },
+    {
+      "bytes": 13345,
+      "path": "data/e0/openevolve/normalized/seed_42/nodes.parquet",
+      "sha256": "0a24d747c9cada9852de7215c1c9795524d9992af05602f7645a0f8215e9f8f1"
+    },
+    {
+      "bytes": 5568,
+      "path": "data/e0/openevolve/normalized/seed_42/edges.parquet",
+      "sha256": "a63dd5a55e0a41e886e40918250237d355f6df9970ca78cbdfb273d2736d722e"
+    },
+    {
+      "bytes": 73171,
+      "path": "data/e0/openevolve/normalized/seed_42/embeddings.parquet",
+      "sha256": "11450caf22652dd25092e42dadd66f1043590eee1b48b22caf0093a5a4f3db24"
+    },
+    {
+      "bytes": 30913,
+      "path": "data/e0/openevolve/normalized/seed_42/query_embeddings.parquet",
+      "sha256": "9151d50778767db14d4e22a9eba798e9ebd141e6ac8833066e707997d5d7268c"
+    },
+    {
+      "bytes": 11308,
+      "path": "data/e0/openevolve/normalized/seed_42/queries.jsonl",
+      "sha256": "af0bb41a8457fb95f8c3369e3e561e26d11161a45f65d8a0823f1fb960c9b989"
+    }
+  ],
+  "output": {
+    "bytes": 10675739,
+    "path": "results/e0/plan_space/tridb_live_v0.3/observations.jsonl",
+    "sha256": "27c9b5864524370367950878b57019f5ed6ad7d3377c79a3789187e9cd0e8ad2"
+  },
+  "plan_limit": null,
+  "query_limit": null,
+  "repetitions": 3,
+  "schema_version": "e0-plan-run-v0.2.0",
+  "seconds": 87.879,
+  "valid_for_system_latency_claims": true
+}
