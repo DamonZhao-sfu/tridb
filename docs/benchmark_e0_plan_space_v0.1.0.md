@@ -6,6 +6,18 @@
 > **口径：** `configs/e0/plan_space_v0.1.yaml`（**测量前**冻结）
 > **被测对象：Polyglot-Tuned 基线，不是 TriDB。** 本文任何数字都不构成 TriDB 的性能主张。
 
+> **⚠️ 本文的 Polyglot 测量已整体撤回（2026-08-18）。** `results/e0/plan_space/polyglot_live_v0.2`
+> 两个数据集的数字都不可用：
+>
+> - **OpenEvolve**：1,010 个 cell 全部返回空 `result_ids`，`hit_at_1` 恒为 0，质量等价集退化成
+>   整个计划网格，报出的 spread 中位 9.38× 不满足「质量等价前提下」的定义。该数据集的 polyglot
+>   loader 在这次 run 结束后约 2 分钟才完成，测量时三个库都是空的。
+> - **STARK-PRIME**：与精确 oracle 在 98 个 `traverse_first` cell 上不一致，全部集中在 hops=2；
+>   用逐字节相同的输入与相同计划重跑，这 98 个 cell 全部匹配 oracle。产出本 run 的
+>   `live_backend.py` 版本从未提交进 git，无法恢复，因此这些数字无法归因到任何代码版本。
+>
+> 根因、时间线与替代测量见 `docs/superpowers/plans/2026-08-18-e1-composition.md` Task 1 与 Task 5。
+
 ## TL;DR
 
 | 指标 | 结果 | 判停 |
