@@ -21,6 +21,21 @@ def _bytes(values: list[Any]) -> int:
     return len(json.dumps(values, ensure_ascii=False, default=str).encode())
 
 
+class ShipCounter:
+    """Counts rows, bytes, and serialization time crossing a store boundary."""
+
+    def __init__(self) -> None:
+        self.rows = 0
+        self.bytes = 0
+        self.serialization_ms = 0.0
+
+    def add(self, values: list[Any]) -> None:
+        started = time.perf_counter_ns()
+        self.rows += len(values)
+        self.bytes += _bytes(values)
+        self.serialization_ms += _ms(started)
+
+
 def _identifier(value: str) -> str:
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
         raise ValueError(f"unsafe database identifier: {value!r}")
@@ -310,14 +325,7 @@ class PolyglotLiveDataset:
             "candidates": 0,
         }
         round_trips = 0
-        bytes_shipped = 0
-        serialization_ms = 0.0
-
-        def ship(values: list[Any]) -> None:
-            nonlocal bytes_shipped, serialization_ms
-            serialization_start = time.perf_counter_ns()
-            bytes_shipped += _bytes(values)
-            serialization_ms += _ms(serialization_start)
+        counter = ShipCounter()
 
         if plan.shape == "vector_first":
             stage = time.perf_counter_ns()
@@ -325,13 +333,13 @@ class PolyglotLiveDataset:
             stages["ann_ms"] = _ms(stage)
             round_trips += 1
             cardinality["seeds"] = len(seeds)
-            ship(seeds)
+            counter.add(seeds)
             if plan.predicate_placement == "during":
                 stage = time.perf_counter_ns()
                 seeds = self._pg_filter(query, seeds)
                 stages["filter_ms"] = _ms(stage)
                 round_trips += 1
-                ship(seeds)
+                counter.add(seeds)
             stage = time.perf_counter_ns()
             candidates = self._neo_reach(
                 query, plan.hops, restrict_ids=seeds, apply_predicate=False
@@ -339,13 +347,13 @@ class PolyglotLiveDataset:
             stages["traverse_ms"] = _ms(stage)
             round_trips += 1
             cardinality["reached"] = len(candidates)
-            ship(candidates)
+            counter.add(candidates)
             if plan.predicate_placement == "post":
                 stage = time.perf_counter_ns()
                 candidates = self._pg_filter(query, candidates)
                 stages["filter_ms"] = _ms(stage)
                 round_trips += 1
-                ship(candidates)
+                counter.add(candidates)
             rank = {node_id: idx for idx, node_id in enumerate(seeds)}
             candidates.sort(key=lambda node_id: rank.get(node_id, len(rank)))
 
@@ -356,7 +364,7 @@ class PolyglotLiveDataset:
             stages["ann_ms"] = stages["filter_ms"]
             round_trips += 1
             cardinality["seeds"] = len(seeds)
-            ship(seeds)
+            counter.add(seeds)
             stage = time.perf_counter_ns()
             candidates = self._neo_reach(
                 query, plan.hops, restrict_ids=seeds, apply_predicate=False
@@ -364,7 +372,7 @@ class PolyglotLiveDataset:
             stages["traverse_ms"] = _ms(stage)
             round_trips += 1
             cardinality["reached"] = len(candidates)
-            ship(candidates)
+            counter.add(candidates)
             rank = {node_id: idx for idx, node_id in enumerate(seeds)}
             candidates.sort(key=lambda node_id: rank.get(node_id, len(rank)))
 
@@ -379,12 +387,12 @@ class PolyglotLiveDataset:
             stages["traverse_ms"] = _ms(stage)
             round_trips += 1
             cardinality["reached"] = len(reached)
-            ship(reached)
+            counter.add(reached)
             stage = time.perf_counter_ns()
             candidates = self._pg_rank(query, plan.k, reached)
             stages["ann_ms"] = _ms(stage)
             round_trips += 1
-            ship(candidates)
+            counter.add(candidates)
         else:  # pragma: no cover
             raise ValueError(f"unknown shape {plan.shape}")
 
@@ -401,10 +409,11 @@ class PolyglotLiveDataset:
             "stage_latency_ms": stages,
             "intermediate_cardinality": cardinality,
             "round_trips": round_trips,
-            "bytes_shipped": bytes_shipped,
-            "serialization_ms": serialization_ms,
+            "bytes_shipped": counter.bytes,
+            "rows_shipped": counter.rows,
+            "serialization_ms": counter.serialization_ms,
             "serialization_fraction": (
-                0.0 if latency_ms == 0 else serialization_ms / latency_ms
+                0.0 if latency_ms == 0 else counter.serialization_ms / latency_ms
             ),
             "quality": quality_metrics(result_ids, query.answer_ids),
             "result_ids": result_ids,

@@ -151,6 +151,23 @@ def test_empty_stores_names_every_zero_leg():
 
 
 @pytest.mark.unit
+def test_ship_counts_rows_and_bytes():
+    """ShipCounter must accumulate rows and bytes across multiple .add() calls,
+    and track non-negative serialization time — spec §3.3 requires reporting
+    both the row count and byte count of intermediate results crossing a
+    store boundary, not just bytes.
+    """
+    from experiments.e0.plan_spread import live_backend
+
+    counter = live_backend.ShipCounter()
+    counter.add(["a", "b", "c"])
+    counter.add(["d"])
+    assert counter.rows == 4
+    assert counter.bytes > 0
+    assert counter.serialization_ms >= 0.0
+
+
+@pytest.mark.unit
 def test_loader_command_is_runnable_for_known_datasets():
     """The empty-store error must name a real command, not just a diagnosis."""
     from experiments.e0.plan_spread.live_backend import _loader_command

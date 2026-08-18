@@ -221,6 +221,7 @@ class TriDBLiveDataset:
             "round_trips": 0,
             "client_query_round_trips": 1,
             "bytes_shipped": 0,
+            "rows_shipped": 0,
             "result_bytes": len(json.dumps(result_ids, default=str).encode()),
             "serialization_fraction": 0.0,
             "graph_censored": bool(censored),
