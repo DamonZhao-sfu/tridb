@@ -80,6 +80,61 @@ def test_polyglot_predicate_sql_honours_same_parent():
     assert "parent_id" in sql, f"same_parent not applied, got: {sql}"
 
 
+@pytest.mark.integration
+def test_polyglot_neo_reach_same_parent_narrows_candidates():
+    """Behavioural guard for same_parent: it must actually change which
+    candidates survive, not merely appear in generated SQL/Cypher text.
+    `test_polyglot_predicate_sql_honours_same_parent` above asserts string
+    containment on `_predicate_sql`'s output — that assertion cannot fail if
+    `_neo_predicate` is broken, `_parents_of` is broken, or the parent
+    direction is reversed.
+
+    Deliberately calls `_neo_reach` directly with `apply_predicate=True` vs
+    `False`, rather than going through `execute()` on a `traverse_first`/
+    `during` plan. `execute()` would not isolate this: for `traverse_first`,
+    `_pg_rank` (SQL) always re-applies `_predicate_sql` after the Neo4j
+    traversal regardless of placement, so an end-to-end comparison stays
+    narrowed even with `_neo_predicate`'s same_parent branch entirely
+    deleted — verified by hand before writing this assertion. Calling
+    `_neo_reach` directly is the only way to prove the Cypher clause itself
+    does the narrowing; `apply_predicate=True` is also exactly what
+    `during`-placement `traverse_first` plans pass in `execute()` (see
+    live_backend.py), so this exercises the real code path, just without
+    the SQL step that would otherwise mask a break in it.
+
+    Read-only: constructs the backend and reads against the shared
+    e0_openevolve_* stores, never mutates them, and never reloads.
+    """
+    from experiments.e0.plan_spread.config import load_config
+    from experiments.e0.plan_spread.live_backend import PolyglotLiveDataset
+
+    config = load_config(Path("configs/e0/plan_space_v0.3.yaml"))
+    spec = config["datasets"]["openevolve"]
+    backend = PolyglotLiveDataset("openevolve", spec)
+    try:
+        queries = {q.query_id: q for q in backend.load_queries(Path(spec["queries"]))}
+        query = queries["oe-001"]
+        assert query.structured_predicate.get("same_parent") is True
+
+        with_predicate = backend._neo_reach(
+            query, query.hop_limit, restrict_ids=None, apply_predicate=True
+        )
+        without_predicate = backend._neo_reach(
+            query, query.hop_limit, restrict_ids=None, apply_predicate=False
+        )
+    finally:
+        backend.close()
+
+    assert set(with_predicate) <= set(without_predicate), (
+        f"with-predicate {with_predicate} is not a subset of "
+        f"without-predicate {without_predicate}"
+    )
+    assert len(with_predicate) < len(without_predicate), (
+        "same_parent did not narrow _neo_reach's Cypher-side candidates: "
+        f"with={with_predicate} without={without_predicate}"
+    )
+
+
 @pytest.mark.unit
 def test_empty_stores_names_every_zero_leg():
     """Pure decision logic, no I/O: which legs are empty given their counts."""
