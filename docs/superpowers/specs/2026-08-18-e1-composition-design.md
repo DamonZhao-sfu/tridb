@@ -112,25 +112,39 @@ E0 的 `repetitions: 3` 只够 p50，而 trevillisPlan 要求 p50/p95/p99。E1 �
 | 关掉 | 实现 | 是否改 C |
 |---|---|---|
 | relational | `predicate` 传 `'TRUE'` | 否 |
-| vector | 传零向量，所有 cosine 距离相等，退化为确定性 id tie-break | 否 |
-| graph | 需一条跳过可达性约束的路径 | **是**，benchmark-only 面加 `graph_off` 布尔参数 |
+| vector | `vector_off` 布尔参数 | **是** |
+| graph | `graph_off` 布尔参数 | **是** |
 
-`graph_off` 落在 `src/tjs_pg`，属 stock-PG 可 build 可测路径，不受 GX10 门禁。它不进入 `graph_query()` 公开 v1 模板。
+**为什么向量腿不能用零向量关断**（规划阶段发现，原设计有误）：pgvector 的 `<=>` 计算
+`1 - (a·b)/(|a||b|)`，零向量使 `|a| = 0`，返回 **NaN** 而非「所有距离相等」，排序行为未定义。
+因此必须显式加 `vector_off`：为真时 ANN 种子查询改为 `ORDER BY <id_col> LIMIT k`，
+traverse-first 的 top-k 改为保留**先到先得**的插入序而非距离序。两者都是确定性的。
+
+**shape 不是自由变量**（原设计有误）：traverse-first 的候选集**由遍历生成**，因此
+`graph_off = true` 与 `traverse_first` 语义上不可组合，C 侧应对该组合 `ereport(ERROR)`。
+每个变体的 shape 由模态组合唯一决定，见 §4.2 表。
+
+两个参数都落在 `src/tjs_pg` 的 benchmark-only 面，属 stock-PG 可 build 可测路径，不受 GX10
+门禁，也不进入 `graph_query()` 公开 v1 模板。
 
 ### 4.2 七个变体
 
-固定在每 query 在 TriDB 上的等质量最优 `k` / `hop` 上（与 §3.2 取同一个计划），
-只变模态组合。plan shape 固定为该最优计划的 shape，使七个变体之间唯一的自变量是模态组合：
+`k` 与 `hops` 固定在每 query 在 TriDB 上的等质量最优计划的取值（与 §3.2 同一个计划），
+shape 则由模态组合唯一决定——graph-off 变体无法使用 traverse-first，因为那里遍历就是候选生成器：
 
-| 变体 | 对应现实系统能力 | 预期 |
-|---|---|---|
-| V | 纯向量 RAG | 塌 |
-| G | 纯图遍历 | 大 reach 时塌 |
-| R | 纯关系过滤 | 塌 |
-| V+R | ≈ VBASE / ACORN 能力上限 | 需多跳的查询上塌 |
-| V+G | ≈ GraphRAG / Zep 能力 | 需结构化谓词的查询上塌或成本爆 |
-| G+R | 无语义排序 | 大 reach 时塌 |
-| V+G+R | 完整 | 基线 |
+| 变体 | shape | predicate | vector_off | graph_off | 对应现实系统能力 | 预期 |
+|---|---|---|---|---|---|---|
+| V | vector_first | `TRUE` | false | true | 纯向量 RAG | 塌 |
+| G | traverse_first | `TRUE` | true | false | 纯图遍历 | 大 reach 时塌 |
+| R | filter_first | 真实 | true | true | 纯关系过滤 | 塌 |
+| V+R | filter_first | 真实 | false | true | ≈ VBASE / ACORN 能力上限 | 需多跳的查询上塌 |
+| V+G | traverse_first | `TRUE` | false | false | ≈ GraphRAG / Zep 能力 | 需结构化谓词的查询上塌或成本爆 |
+| G+R | traverse_first | 真实 | true | false | 无语义排序 | 大 reach 时塌 |
+| V+G+R | traverse_first | 真实 | false | false | 完整 | 基线 |
+
+因为 shape 随变体变化，报告必须说明：变体之间的差异同时包含模态与 shape 两个因素，而
+shape 是模态组合的**必然后果**而非自由选择。V+G+R 另外附跑一次「该 query 的等质量最优
+shape」，用于确认 traverse-first 基线没有低估完整系统。
 
 规模：7 × 50 × 31 ≈ 10,850 observation。
 
