@@ -12,7 +12,13 @@
 
 ## Global Constraints
 
-- 所有 Python 命令用 `.venv-e0/bin/python`（`E0_PY`），不是 `.venv/bin/python`。
+- **venv 选择（预检时写反了，已更正）**：`.venv/bin/python`（Makefile 的 `$(PY)`）用于所有
+  接触 `live_backend.py` 或 `tridb_backend.py` 的命令，以及所有 `tests/test_e1_*.py`。
+  `.venv/bin/python`（`$(E0_PY)`）只用于数据准备与 `parquet_reference` 路径。
+  依据是仓库既有约定：Makefile 里 `e0-plan-live`、`e0-openevolve-polyglot-load`、
+  `e0-tridb-load`、`e0-tridb-run`、`e0-tridb-analyze` 全部用 `$(PY)`，只有
+  `e0-plan-reference-*` 和数据准备用 `$(E0_PY)`。`.venv-e0` 由 `requirements-e0.lock`
+  固定，刻意不含 `neo4j` / `pymilvus` / `psycopg`。
 - TriDB 连接：host `/localhome/hza214/tridb/.tridb-pgdata`（unix socket 目录），port `55432`，db `tridb_e0_stark` / `tridb_e0_openevolve`。
 - Polyglot 连接：Milvus `127.0.0.1:19530`、Neo4j `bolt://127.0.0.1:7688`（auth `neo4j/testpassword`）、pgvector `127.0.0.1:5434` db `tridb_wiki`。
 - Polyglot 三件套用 `scripts/baseline_up_podman.sh` 起，镜像固定为 `milvusdb/milvus:v2.4.5`、`neo4j:5.20`、`pgvector/pgvector:pg16`，`--network=host`。
@@ -81,7 +87,7 @@ Expected: neo4j / pgvector / milvus 三行 ready 日志。若报 subuid/subgid �
 ```python
 """Probe each Polyglot leg for oe-000 with the exact parameters the E0 run used.
 
-Run:  .venv-e0/bin/python -m tools.e1.probe_openevolve
+Run:  .venv/bin/python -m tools.e1.probe_openevolve
 """
 
 from __future__ import annotations
@@ -174,7 +180,7 @@ if __name__ == "__main__":
 - [ ] **Step 3: 运行探针，定位断点**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m tools.e1.probe_openevolve
+cd /localhome/hza214/tridb && .venv/bin/python -m tools.e1.probe_openevolve
 ```
 
 Expected: 恰好一条 `LEG ...` 行报告 0 或空。把该行记进提交信息。
@@ -220,7 +226,7 @@ def test_polyglot_returns_nonempty_on_openevolve():
 - [ ] **Step 5: 运行测试，确认它失败**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_parity.py::test_polyglot_returns_nonempty_on_openevolve -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_parity.py::test_polyglot_returns_nonempty_on_openevolve -v
 ```
 
 Expected: FAIL，`assert 0 > 0`。
@@ -234,7 +240,7 @@ Expected: FAIL，`assert 0 > 0`。
 - [ ] **Step 7: 运行测试，确认通过**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_parity.py::test_polyglot_returns_nonempty_on_openevolve -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_parity.py::test_polyglot_returns_nonempty_on_openevolve -v
 ```
 
 Expected: PASS。
@@ -305,7 +311,7 @@ class _StubBackend:
 - [ ] **Step 2: 运行测试确认失败**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_parity.py::test_polyglot_predicate_sql_honours_same_parent -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_parity.py::test_polyglot_predicate_sql_honours_same_parent -v
 ```
 
 Expected: FAIL，`same_parent not applied`。
@@ -313,7 +319,7 @@ Expected: FAIL，`same_parent not applied`。
 - [ ] **Step 3: 确认 Polyglot 的 pg 表有 parent 列**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -c "
+cd /localhome/hza214/tridb && .venv/bin/python -c "
 import psycopg
 with psycopg.connect(host='127.0.0.1',port=5434,dbname='tridb_wiki',user='postgres',password='postgres') as c:
     with c.cursor() as cur:
@@ -382,7 +388,7 @@ Neo4j 侧需要节点带 `parent_id` 属性；若缺，在 `tools/e0/load_openev
 - [ ] **Step 5: 运行测试确认通过**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_parity.py -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_parity.py -v
 ```
 
 Expected: 全部 PASS。
@@ -425,7 +431,7 @@ def test_ship_counts_rows_and_bytes():
 - [ ] **Step 2: 运行确认失败**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_parity.py::test_ship_counts_rows_and_bytes -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_parity.py::test_ship_counts_rows_and_bytes -v
 ```
 
 Expected: FAIL，`AttributeError: module ... has no attribute 'ShipCounter'`。
@@ -457,7 +463,7 @@ class ShipCounter:
 - [ ] **Step 4: 运行确认通过**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_parity.py -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_parity.py -v
 ```
 
 Expected: PASS。
@@ -512,7 +518,7 @@ def test_referee_assigns_blame_against_the_oracle():
 - [ ] **Step 2: 运行确认失败**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_parity.py::test_referee_assigns_blame_against_the_oracle -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_parity.py::test_referee_assigns_blame_against_the_oracle -v
 ```
 
 Expected: FAIL，`ModuleNotFoundError: tools.e1.parity_referee`。
@@ -638,15 +644,17 @@ if __name__ == "__main__":
 - [ ] **Step 4: 运行测试确认通过**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_parity.py -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_parity.py -v
 ```
 
 Expected: PASS。
 
 - [ ] **Step 5: 跑参照 run 并执行门禁**
 
-`parquet_reference` 需要一份与 v0.3 网格一致的完整参照数据。若 `results/e0/plan_space/reference_stark_smoke_v0.3`
-不是完整网格，先跑完整参照：
+**已由控制器预先跑完**：`results/e1/reference_full_v0.3` 存在且 `complete: true`
+（3,450 cell、0 error、61 s），与两个 live run 的 cell 三方重合 3,450/3,450。若该目录已存在
+且 manifest `complete` 为 true，**跳过本命令**，直接做判责。否则用它重建（注意这是唯一仍用
+`$(E0_PY)` 的命令）：
 
 ```bash
 cd /localhome/hza214/tridb
@@ -659,7 +667,7 @@ cd /localhome/hza214/tridb
 
 ```bash
 mkdir -p results/e1
-.venv-e0/bin/python -m tools.e1.parity_referee \
+.venv/bin/python -m tools.e1.parity_referee \
   --tridb results/e0/plan_space/tridb_live_v0.3 \
   --polyglot results/e0/plan_space/polyglot_live_v0.2 \
   --reference results/e1/reference_full_v0.3 \
@@ -913,7 +921,7 @@ Expected: PASS，包括新加的三条断言。
 
 ```bash
 cd /localhome/hza214/tridb
-.venv-e0/bin/python -m experiments.e0.plan_spread.runner --backend tridb_live \
+.venv/bin/python -m experiments.e0.plan_spread.runner --backend tridb_live \
   --config configs/e0/plan_space_v0.3.yaml \
   --output-dir results/e1/tridb_regression_check \
   --dataset openevolve --query-limit 2 --plan-limit 6 --repetitions 1
@@ -992,7 +1000,7 @@ def test_variant_plan_carries_flags_and_stable_id():
 - [ ] **Step 2: 运行确认失败**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_variants.py -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_variants.py -v
 ```
 
 Expected: FAIL，`ModuleNotFoundError: experiments.e1.variants`。
@@ -1099,7 +1107,7 @@ def variant_plan(variant: Variant, k: int, hops: int) -> AblationPlanSpec:
 - [ ] **Step 4: 运行确认通过**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_variants.py -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_variants.py -v
 ```
 
 Expected: 4 passed。
@@ -1185,7 +1193,7 @@ def test_select_plans_includes_both_systems_optima_and_the_default():
 - [ ] **Step 2: 运行确认失败**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_plan_selection.py -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_plan_selection.py -v
 ```
 
 Expected: FAIL，`ModuleNotFoundError`。
@@ -1315,7 +1323,7 @@ def load_plan_rows(run_dir: Path) -> list[dict[str, Any]]:
 - [ ] **Step 4: 运行确认通过**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_plan_selection.py -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_plan_selection.py -v
 ```
 
 Expected: 3 passed。
@@ -1323,7 +1331,7 @@ Expected: 3 passed。
 - [ ] **Step 5: 在真实 E0 数据上核对规模**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -c "
+cd /localhome/hza214/tridb && .venv/bin/python -c "
 from pathlib import Path
 from experiments.e1.plan_selection import load_plan_rows, select_plans
 t = load_plan_rows(Path('results/e0/plan_space/tridb_live_v0.3'))
@@ -1390,7 +1398,7 @@ def test_e1_config_is_frozen_with_the_declared_contract():
 - [ ] **Step 2: 运行确认失败**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_interleave.py -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_interleave.py -v
 ```
 
 Expected: FAIL，文件不存在。
@@ -1448,7 +1456,7 @@ interleave:
 - [ ] **Step 4: 运行确认通过**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_interleave.py -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_interleave.py -v
 ```
 
 Expected: PASS。
@@ -1504,7 +1512,7 @@ def test_observation_key_includes_the_backend():
 - [ ] **Step 2: 运行确认失败**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_interleave.py -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_interleave.py -v
 ```
 
 Expected: FAIL，`ModuleNotFoundError: experiments.e1.interleaved_runner`。
@@ -1743,7 +1751,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: 运行确认通过**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_interleave.py -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_interleave.py -v
 ```
 
 Expected: 3 passed。
@@ -1752,7 +1760,7 @@ Expected: 3 passed。
 
 ```bash
 cd /localhome/hza214/tridb
-.venv-e0/bin/python -m experiments.e1.interleaved_runner \
+.venv/bin/python -m experiments.e1.interleaved_runner \
   --output-dir results/e1/h2h_smoke \
   --dataset openevolve --query-limit 2 --repetitions 2
 ```
@@ -1801,7 +1809,7 @@ def test_capability_upper_bound_is_independent_of_ranking():
 - [ ] **Step 2: 运行确认失败**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_variants.py::test_capability_upper_bound_is_independent_of_ranking -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_variants.py::test_capability_upper_bound_is_independent_of_ranking -v
 ```
 
 Expected: FAIL，`ModuleNotFoundError`。
@@ -2018,7 +2026,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: 运行测试确认通过**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_variants.py -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_variants.py -v
 ```
 
 Expected: 5 passed。
@@ -2027,7 +2035,7 @@ Expected: 5 passed。
 
 ```bash
 cd /localhome/hza214/tridb
-.venv-e0/bin/python -m experiments.e1.ablation_runner \
+.venv/bin/python -m experiments.e1.ablation_runner \
   --output-dir results/e1/ablation_smoke \
   --dataset openevolve --query-limit 2 --repetitions 2
 ```
@@ -2115,7 +2123,7 @@ def test_cost_decomposition_splits_the_gap_and_reports_the_remainder():
 - [ ] **Step 2: 运行确认失败**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_analyze.py -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_analyze.py -v
 ```
 
 Expected: FAIL，`ModuleNotFoundError`。
@@ -2363,7 +2371,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: 运行确认通过**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_analyze.py -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_analyze.py -v
 ```
 
 Expected: 2 passed。第二个测试断言 `round_trip_ms > 0`，所以 Step 3 的占位常量 `0.1` 是必须
@@ -2436,7 +2444,7 @@ def test_necessity_verdict_triggers_when_a_pair_matches_the_full_variant():
 - [ ] **Step 2: 运行确认失败**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_analyze.py -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_analyze.py -v
 ```
 
 Expected: 新增的两个测试 FAIL。
@@ -2607,7 +2615,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: 运行确认通过**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_analyze.py -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_analyze.py -v
 ```
 
 Expected: 4 passed。
@@ -2730,7 +2738,7 @@ if __name__ == "__main__":
 - [ ] **Step 2: 运行测量**
 
 ```bash
-cd /localhome/hza214/tridb && mkdir -p results/e1 && .venv-e0/bin/python -m tools.e1.measure_round_trip
+cd /localhome/hza214/tridb && mkdir -p results/e1 && .venv/bin/python -m tools.e1.measure_round_trip
 ```
 
 Expected: 打印三个中位数（毫秒量级，多半在 0.1–1 ms）。
@@ -2756,7 +2764,7 @@ ROUND_TRIP_MS = <实测值>
 - [ ] **Step 4: 重跑分析测试**
 
 ```bash
-cd /localhome/hza214/tridb && .venv-e0/bin/python -m pytest tests/test_e1_analyze.py -v
+cd /localhome/hza214/tridb && .venv/bin/python -m pytest tests/test_e1_analyze.py -v
 ```
 
 Expected: 4 passed。
@@ -2790,16 +2798,16 @@ E1_H2H_OUT ?= results/e1/h2h_v0.1
 E1_ABL_OUT ?= results/e1/ablation_v0.1
 
 e1-h2h:
-	$(E0_PY) -m experiments.e1.interleaved_runner \
+	$(PY) -m experiments.e1.interleaved_runner \
 	  --config $(E1_CONFIG) --output-dir $(E1_H2H_OUT)
 
 e1-ablation:
-	$(E0_PY) -m experiments.e1.ablation_runner \
+	$(PY) -m experiments.e1.ablation_runner \
 	  --config $(E1_CONFIG) --output-dir $(E1_ABL_OUT)
 
 e1-analyze:
-	$(E0_PY) -m experiments.e1.analyze_h2h --run-dir $(E1_H2H_OUT) --config $(E1_CONFIG)
-	$(E0_PY) -m experiments.e1.analyze_ablation --run-dir $(E1_ABL_OUT) --config $(E1_CONFIG)
+	$(PY) -m experiments.e1.analyze_h2h --run-dir $(E1_H2H_OUT) --config $(E1_CONFIG)
+	$(PY) -m experiments.e1.analyze_ablation --run-dir $(E1_ABL_OUT) --config $(E1_CONFIG)
 ```
 
 - [ ] **Step 2: 确认门禁已通过**
