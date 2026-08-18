@@ -800,11 +800,27 @@ END $$;
 
 - [ ] **Step 2: 运行确认失败**
 
+> **测试门已更换（控制器裁定，见 Ruling Q）。** 原计划用 `scripts/pg17_graph_test.sh`，它需要容器：
+> 本机 `docker` 与 `podman` 都不在 PATH 上，且 `tridb/pg17-unfork:dev` 镜像不存在。改为在本地
+> PostgreSQL 16.14 集群（`/localhome/hza214/tridb/.tridb-pgdata`，端口 55432）上跑同一份
+> `test/e0_tridb_internal_test.sql`，**放在本步骤自建自删的独立数据库里**。
+>
+> **绝对不要**在 `tridb_e0_stark` 或 `tridb_e0_openevolve` 里跑——那是测量数据库。
+
 ```bash
-cd /localhome/hza214/tridb && make -C src/tjs_pg clean all && scripts/pg17_graph_test.sh
+cd /localhome/hza214/tridb
+PGHOST=/localhome/hza214/tridb/.tridb-pgdata PGPORT=55432
+export PGHOST PGPORT
+psql -d postgres -c 'DROP DATABASE IF EXISTS tridb_e1_sqlgate'   -c 'CREATE DATABASE tridb_e1_sqlgate'
+make -C src/tjs_pg all           # 注意：不要 clean，见 Ruling R
+psql -d tridb_e1_sqlgate -v ON_ERROR_STOP=1 -f test/e0_tridb_internal_test.sql
 ```
 
 Expected: FAIL，函数参数个数不匹配（现有签名 12 参，测试给 14 参）。
+
+该数据库需要先安装 schema 才能跑套件；若套件因缺函数而非缺参数报错，先把
+`experiments/e0/tridb_schema.sql`（替换 `@GRAPH_LIB@` / `@TJS_LIB@` 为
+`src/graph_store/graph_store_am.so` 与 `src/tjs_pg/tjs_pg.so` 的绝对路径）灌进该库。
 
 - [ ] **Step 3: 改 C 签名与参数解析**
 
@@ -911,11 +927,31 @@ DROP FUNCTION IF EXISTS public.tjs_e0_open(
 
 - [ ] **Step 8: 重建并运行 SQL 套件确认通过**
 
+> **Ruling R — 重建与重装之间存在崩溃窗口。** 活测量库 `tridb_e0_stark` / `tridb_e0_openevolve`
+> 里的 `tjs_e0_open` 目前声明为 **12 参**，绑定到 `src/tjs_pg/tjs_pg.so` 的绝对路径。一旦你把该
+> .so 重建成 14 参版本，这两个库的声明仍是 12 参——此时任何对 `tjs_e0_open` 的调用都会让 C 代码
+> 读取两个从未传入的参数，属未定义行为，可能直接打挂 Postgres 后端进程。
+>
+> 因此顺序是硬性的：**改 C → 更新 `tridb_schema.sql` → 重建 .so → 立刻 `make e0-tridb-load`
+> 重装（`--reset`，会重新灌 schema）→ 之后才允许任何 TriDB 查询或测量。**
+> 重建与重装之间不得对活库执行任何 `tjs_e0_open` 调用。
+
 ```bash
-cd /localhome/hza214/tridb && make -C src/tjs_pg clean all && scripts/pg17_graph_test.sh
+cd /localhome/hza214/tridb
+make -C src/tjs_pg clean all
+export PGHOST=/localhome/hza214/tridb/.tridb-pgdata PGPORT=55432
+psql -d postgres -c 'DROP DATABASE IF EXISTS tridb_e1_sqlgate'   -c 'CREATE DATABASE tridb_e1_sqlgate'
+psql -d tridb_e1_sqlgate -v ON_ERROR_STOP=1 -f test/e0_tridb_internal_test.sql
+psql -d postgres -c 'DROP DATABASE IF EXISTS tridb_e1_sqlgate'
 ```
 
 Expected: PASS，包括新加的三条断言。
+
+`make e0-tridb-load` 的重装约需 4 分钟（STARK 234.5 s + OpenEvolve 0.4 s），由**控制器**在
+你报告完成后执行，不要自己跑——它会 `--reset` 掉两个测量数据库。
+
+**claim boundary 收紧**：本门只验证 stock PostgreSQL **16.14**，不验证 PG 17，也不验证 fork。
+Task 15 的 Material Passport 必须如实写明。
 
 - [ ] **Step 9: 更新 Python 后端传参**
 
