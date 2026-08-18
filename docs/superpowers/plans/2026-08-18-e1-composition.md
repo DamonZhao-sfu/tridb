@@ -669,7 +669,7 @@ cd /localhome/hza214/tridb
 mkdir -p results/e1
 .venv/bin/python -m tools.e1.parity_referee \
   --tridb results/e0/plan_space/tridb_live_v0.3 \
-  --polyglot results/e0/plan_space/polyglot_live_v0.2 \
+  --polyglot results/e1/polyglot_full_v0.3 \
   --reference results/e1/reference_full_v0.3 \
   --out results/e1/parity_report.json
 ```
@@ -697,21 +697,36 @@ git commit -m "feat(e1): referee TriDB and Polyglot against the exact oracle bef
 **Files:**
 - Modify: `docs/benchmark_e0_plan_space_v0.1.0.md`
 
-**背景：** `results/e0/plan_space/polyglot_live_v0.2/summary.json` 报 OpenEvolve plan spread
-中位 9.38×。但该数据集全部 1,010 个 cell 的 `result_ids` 为空 → 全部 `hit_at_1 = 0` → 质量等价集
-退化为整个计划网格 → spread 变成整个网格的 max/min，与「质量等价前提下」的定义不符。这个数
-必须撤回，不能留在文档里被后续引用。
+**背景（撤回范围比初版计划写的更宽，已按实测更正）：** 整个 `polyglot_live_v0.2` 作废，
+不是只有 OpenEvolve 那一半。两条独立证据：
+
+1. **OpenEvolve 半边**：全部 1,010 个 cell 的 `result_ids` 为空 → `hit_at_1` 恒为 0 → 质量等价集
+   退化成整个计划网格 → 报出的 spread 中位 9.38× 不满足「质量等价前提下」的定义。根因是装载
+   顺序：该数据集的 polyglot loader 在这次 run **结束后** 2 分钟才跑完
+   （run 于 06:40:46 UTC 结束、耗时 278.7 s 故约 06:36:08 开始；loader 记录为 06:43:00 UTC）。
+2. **STARK 半边**：与精确 oracle 在 98 个 `traverse_first` cell 上不一致，**全部集中在 hops=2**，
+   而用逐字节相同的输入、相同的计划网格重跑一次，这 98 个 cell 98/98 匹配 oracle。数据相同、
+   计划相同、答案不同 → 代码不同；而 `live_backend.py` 当时未被 git 跟踪，产出该 run 的版本
+   无法恢复。
+
+因此文档中一切来自该 run 的质量或延迟数字都要撤回，并注明产出代码不可追溯。
 
 - [ ] **Step 1: 在文档顶部加撤回声明**
 
 在 `docs/benchmark_e0_plan_space_v0.1.0.md` 的 TL;DR 之前插入：
 
 ```markdown
-> **⚠️ 部分结论已撤回（2026-08-18）。** 本文中一切依赖 Polyglot 在 **OpenEvolve** 上质量指标
-> 的数字均无效：`results/e0/plan_space/polyglot_live_v0.2` 的 1,010 个 OpenEvolve cell 全部返回
-> 空 `result_ids`，导致 `hit_at_1` 恒为 0、质量等价集退化成整个计划网格，其 spread（中位
-> 9.38×）不满足「质量等价前提下」的定义。根因与修复见
-> `docs/superpowers/plans/2026-08-18-e1-composition.md` Task 1。**STARK-PRIME 的结论不受影响。**
+> **⚠️ 本文的 Polyglot 测量已整体撤回（2026-08-18）。** `results/e0/plan_space/polyglot_live_v0.2`
+> 两个数据集的数字都不可用：
+>
+> - **OpenEvolve**：1,010 个 cell 全部返回空 `result_ids`，`hit_at_1` 恒为 0，质量等价集退化成
+>   整个计划网格，报出的 spread 中位 9.38× 不满足「质量等价前提下」的定义。该数据集的 polyglot
+>   loader 在这次 run 结束后约 2 分钟才完成，测量时三个库都是空的。
+> - **STARK-PRIME**：与精确 oracle 在 98 个 `traverse_first` cell 上不一致，全部集中在 hops=2；
+>   用逐字节相同的输入与相同计划重跑，这 98 个 cell 全部匹配 oracle。产出本 run 的
+>   `live_backend.py` 版本从未提交进 git，无法恢复，因此这些数字无法归因到任何代码版本。
+>
+> 根因、时间线与替代测量见 `docs/superpowers/plans/2026-08-18-e1-composition.md` Task 1 与 Task 5。
 ```
 
 - [ ] **Step 2: 检查文档中是否还有其它引用**
@@ -1334,8 +1349,8 @@ Expected: 3 passed。
 cd /localhome/hza214/tridb && .venv/bin/python -c "
 from pathlib import Path
 from experiments.e1.plan_selection import load_plan_rows, select_plans
-t = load_plan_rows(Path('results/e0/plan_space/tridb_live_v0.3'))
-p = load_plan_rows(Path('results/e0/plan_space/polyglot_live_v0.2'))
+t = load_plan_rows(Path('results/e1/tridb_full_v0.3'))
+p = load_plan_rows(Path('results/e1/polyglot_full_v0.3'))
 qs = sorted({(r['dataset'], r['query_id']) for r in t})
 sizes = [len(select_plans(t, p, d, q)) for d, q in qs]
 print('queries', len(qs), 'plans per query min/median/max',
@@ -1389,10 +1404,10 @@ def test_e1_config_is_frozen_with_the_declared_contract():
     assert config["backends"] == ["tridb_live", "polyglot_live"]
     assert config["falsification"]["composition_ratio_median_below"] == 1.2
     assert config["falsification"]["ablation_quality_fraction_above"] == 0.95
-    assert config["source_runs"]["tridb"] == "results/e0/plan_space/tridb_live_v0.3"
-    assert config["source_runs"]["polyglot"] == (
-        "results/e0/plan_space/polyglot_live_v0.2"
-    )
+    assert config["source_runs"]["tridb"] == "results/e1/tridb_full_v0.3"
+    assert config["source_runs"]["polyglot"] == "results/e1/polyglot_full_v0.3"
+    # The E0 artifacts must never be reachable as a plan-selection source again.
+    assert "results/e0/" not in yaml.safe_dump(config["source_runs"])
 ```
 
 - [ ] **Step 2: 运行确认失败**
@@ -1416,9 +1431,16 @@ schema_version: e1-composition-v0.1.0
 backends: [tridb_live, polyglot_live]
 
 # E0 supplies the plan set; E1 does not re-enumerate the grid.
+# Plan selection reads freshly measured grids, NOT the E0 artifacts.
+# results/e0/plan_space/polyglot_live_v0.2 is void: it disagrees with the exact
+# oracle on 98 traverse_first cells (all hops=2) that a re-run over byte-identical
+# inputs gets right, and the live_backend.py version that produced it was never
+# committed and cannot be recovered. tridb_live_v0.3 has the same untracked-code
+# exposure, and Task 6 changes the operator besides. Both grids are therefore
+# re-measured by the controller after Tasks 2 and 6 land, into the paths below.
 source_runs:
-  tridb: results/e0/plan_space/tridb_live_v0.3
-  polyglot: results/e0/plan_space/polyglot_live_v0.2
+  tridb: results/e1/tridb_full_v0.3
+  polyglot: results/e1/polyglot_full_v0.3
 
 # Dataset specs are inherited verbatim so connection details stay in one place.
 inherit_datasets_from: configs/e0/plan_space_v0.3.yaml
