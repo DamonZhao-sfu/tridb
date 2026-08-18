@@ -1,0 +1,61 @@
+# OpenEvolve v0.3.2, local-only 32-iteration E0 trajectory smoke.
+max_iterations: 32
+checkpoint_interval: 16
+random_seed: 42
+log_level: INFO
+log_dir: data/e0/openevolve/raw/seed_42/logs
+
+llm:
+  primary_model: Qwen/Qwen3-32B
+  primary_model_weight: 1.0
+  api_base: http://127.0.0.1:8000/v1
+  api_key: local
+  temperature: 0.2
+  max_tokens: 2048
+  timeout: 600
+  retries: 0
+  random_seed: 42
+
+prompt:
+  system_message: >-
+    /no_think You are improving a deterministic Python function-minimization search algorithm.
+    Modify only the EVOLVE block. Keep run_search() compatible, bounded, terminating,
+    and reproducible under NumPy seeds. Optimize combined_score without external I/O.
+  num_top_programs: 3
+  num_diverse_programs: 2
+  use_template_stochasticity: false
+
+database:
+  db_path: data/e0/openevolve/raw/seed_42/program_db
+  in_memory: true
+  log_prompts: false
+  population_size: 256
+  archive_size: 64
+  num_islands: 2
+  elite_selection_ratio: 0.2
+  exploration_ratio: 0.2
+  exploitation_ratio: 0.6
+  migration_interval: 16
+  migration_rate: 0.1
+  random_seed: 42
+  similarity_threshold: 0.99
+
+evaluator:
+  timeout: 60
+  max_retries: 0
+  cascade_evaluation: false
+  parallel_evaluations: 1
+  use_llm_feedback: false
+  enable_artifacts: true
+
+evolution_trace:
+  enabled: true
+  format: jsonl
+  include_code: true
+  include_prompts: false
+  output_path: data/e0/openevolve/raw/seed_42/evolution_trace.jsonl
+  buffer_size: 1
+  compress: false
+
+diff_based_evolution: true
+max_code_length: 20000

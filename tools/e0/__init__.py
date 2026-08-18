@@ -1,0 +1,6 @@
+"""E0 plan-space-dispersion data preparation utilities."""
+
+STARK_DATASET_REVISION = "88269e23e90587f99476c5dd74e235a0877e69be"
+OPENEVOLVE_VERSION = "0.3.2"
+QWEN3_32B_FP8_REVISION = "aa55da1ecc13d006e8b8e4f54579b1ea8c3db2df"
+QWEN3_EMBEDDING_REVISION = "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3"

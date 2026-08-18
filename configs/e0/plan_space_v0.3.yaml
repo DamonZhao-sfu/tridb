@@ -1,0 +1,94 @@
+# TriDB-native E0 plan-space contract. Frozen before the native measurements.
+schema_version: e0-plan-space-v0.3.0
+
+backend_policy:
+  headline_backend: tridb_live
+  comparison_backend: polyglot_live
+  reference_backend: parquet_reference
+  reference_results_are_system_latency: false
+
+# Semantic contract shared by the parquet oracle, Polyglot, and TriDB backends.
+semantics:
+  edge_types: allowed_union_at_every_hop
+  multiple_anchors: union_unless_required_from_each_anchor
+  reach_depth: one_through_plan_hops
+  exclude_anchor_vertices: true
+  ranking: cosine_distance
+  structured_predicates: [target_entity_type, generation_lte, generation_gte, same_parent]
+
+datasets:
+  stark_prime:
+    nodes: data/e0/stark_prime/normalized/nodes.parquet
+    edges: data/e0/stark_prime/normalized/edges.parquet
+    embeddings: data/e0/stark_prime/normalized/embeddings.parquet
+    query_embeddings: data/e0/stark_prime/normalized/query_embeddings_v0.2.parquet
+    queries: data/e0/stark_prime/normalized/queries_v0.2.jsonl
+    directed_edges_already_include_reverse: true
+    tridb:
+      host: /localhome/hza214/tridb/.tridb-pgdata
+      port: 55432
+      dbname: tridb_e0_stark
+      table: e0_node
+      graph_work_budget: 50000000
+      hnsw_ef_search: 100
+    live:
+      milvus_collection: e0_stark_prime
+      neo4j_label: Node
+      postgres_table: e0_stark_prime_node
+      id_type: integer
+    dimensions:
+      shape: [vector_first, filter_first, traverse_first]
+      k: [1, 5, 10, 20, 50, 100]
+      hops: [1, 2]
+      predicate_placement: [pre, during, post]
+
+  openevolve:
+    nodes: data/e0/openevolve/normalized/seed_42/nodes.parquet
+    edges: data/e0/openevolve/normalized/seed_42/edges.parquet
+    embeddings: data/e0/openevolve/normalized/seed_42/embeddings.parquet
+    query_embeddings: data/e0/openevolve/normalized/seed_42/query_embeddings.parquet
+    queries: data/e0/openevolve/normalized/seed_42/queries.jsonl
+    directed_edges_already_include_reverse: false
+    tridb:
+      host: /localhome/hza214/tridb/.tridb-pgdata
+      port: 55432
+      dbname: tridb_e0_openevolve
+      table: e0_node
+      graph_work_budget: 1000000
+      hnsw_ef_search: 100
+    live:
+      milvus_collection: e0_openevolve
+      neo4j_label: E0OpenEvolveNode
+      postgres_table: e0_openevolve_node
+      id_type: text
+    dimensions:
+      shape: [vector_first, filter_first, traverse_first]
+      k: [1, 5, 10, 20, 31]
+      hops: [1, 2, 3, 5]
+      predicate_placement: [pre, during, post]
+
+valid_placements:
+  vector_first: [during, post]
+  filter_first: [pre]
+  traverse_first: [during, post]
+
+repetitions: 3
+warmups: 1
+timeout_seconds: 120
+top_n: 20
+
+quality:
+  eps_hit: 0.02
+  eps_mrr: 0.02
+  primary: [hit_at_1, mrr]
+  recorded_only: [hit_at_5, recall_at_20]
+
+default_plan:
+  shape: vector_first
+  k: 8
+  hops: 2
+  predicate_placement: post
+
+stop_conditions:
+  plan_spread_median_below: 2.0
+  require_at_least_equivalent_plans: 2

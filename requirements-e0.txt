@@ -1,0 +1,14 @@
+# Isolated dependencies for the E0 data-preparation pipeline.
+# Install with: uv venv --python 3.11 .venv-e0 &&
+#               uv pip install --python .venv-e0/bin/python -r requirements-e0.txt
+openevolve==0.3.2
+stark-qa==1.1.0
+# stark-qa 1.1.0 pulls an RDKit wheel built against NumPy 1.x.
+numpy==1.26.4
+# pytdc (a stark-qa dependency) still imports pkg_resources.
+setuptools==80.9.0
+pyarrow==21.0.0
+pyyaml==6.0.3
+matplotlib==3.11.1
+pytest==9.1.1
+ruff==0.15.22

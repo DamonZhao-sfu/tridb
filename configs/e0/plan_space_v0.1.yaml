@@ -1,0 +1,90 @@
+# E0 plan space — frozen 2026-08-18
+#
+# The cartesian product the Polyglot-Tuned executor enumerates per query, plus the
+# quality-equivalence rule that decides which plans may be compared on latency.
+# Frozen BEFORE any measurement: a plan space widened after seeing the numbers is how a
+# plan-spread result gets manufactured.
+#
+# Companion: docs/e0_plan_space_execution_v0.1.0.md  (decisions D1/D2/D3 in §4)
+
+schema_version: e0-plan-space-v0.1.0
+dataset: stark_prime
+queries: data/e0/stark_prime/normalized/queries_v0.2.jsonl   # 40 = 10 audited + 30 auto-derived
+
+dimensions:
+  # D1 ORIGINALLY froze this to two shapes. REVERSED 2026-08-18 BY MEASUREMENT: the official
+  # answers rank 4,589 / 11,543 / 15,913 / 18,772 / 55,160 in a global exact vector ranking
+  # over 129,375 nodes, so no ANN top-k with k <= 100 can contain them. With the anchor given,
+  # the vector leg ranks INSIDE the reach set and cannot generate candidates -- a space of
+  # only vector_first + filter_first has ZERO feasible plans and no plan spread to report.
+  # traverse_first is therefore implemented and included. The other two are kept because
+  # their failure is itself the finding.
+  #
+  # traverse_first x predicate_placement=pre is dropped by run_plan_space.plan_grid: with
+  # nothing before the traversal it lowers to the same Cypher as `during`.
+  shape:
+    - vector_first    # Milvus ANN top-k over the corpus -> Neo4j confirms reachability -> rank
+    - filter_first    # pgvector ANN inside entity_type = T -> Neo4j confirms reachability -> rank
+    - traverse_first  # Neo4j expands from the anchor (capped at k) -> predicate -> exact rerank
+
+  # ANN seed count. trevillisPlan §3 E0.
+  k: [1, 5, 10, 20, 50, 100]
+
+  # STARK-PRIME carries no query semantics beyond 2 hops (measured: the audited pilot's
+  # hop distribution is {1: 5, 2: 5}; docs/e0_plan_space_execution_v0.1.0.md §1.1), so the
+  # {1,2,3,5} ladder in trevillisPlan is not runnable here. Depth is OpenEvolve's job (P1).
+  #
+  # NOTE hop is enumerated for EVERY query regardless of that query's audited hop_limit.
+  # Under-traversing a 2-hop query is a legitimate (bad) plan: it runs fast and loses
+  # answers, and the quality-equivalence rule below is exactly what excludes it from the
+  # spread computation. Pre-filtering by the audited hop_limit would hide that failure mode.
+  hops: [1, 2]
+
+  # Where the structured predicate (target entity_type) is applied.
+  predicate_placement:
+    - pre       # constrain before expansion (only reachable for filter_first)
+    - during    # applied as the frontier is expanded
+    - post      # applied after expansion, on the candidate set
+
+# (3 shapes x 6 k x 2 hops x 3 placements) - (6 k x 2 hops, traverse_first/pre) = 96 plans/query;
+# 96 x 40 = 3,840 plan executions per repetition.
+repetitions: 3            # median of 3 per plan; p50/p95/p99 reported over queries
+timeout_seconds: 120      # a plan that exceeds this is recorded as INFEASIBLE, not dropped
+
+quality:
+  # Per-query equivalence, against the best plan FOR THAT QUERY.
+  #
+  # Hit@1 is per-query 0 or 1, so eps_hit=0.02 means "must also get Hit@1" -- deliberate.
+  # MRR is continuous (1/rank), so eps_mrr=0.02 is the real tolerance.
+  #
+  # Recall@20 is RECORDED but is NOT an equivalence criterion: the answer-set size is tiny
+  # (audited pilot median 1, max 4), so Recall@20 saturates at 1.0 and would make every plan
+  # "equivalent", collapsing plan spread into a bare latency comparison.
+  # (docs/e0_plan_space_execution_v0.1.0.md §1.2)
+  primary: [hit@1, mrr]
+  eps_hit: 0.02
+  eps_mrr: 0.02
+  recorded_only: [recall@20, hit@5]
+
+metrics:
+  latency: [p50, p95, p99]       # mean is banned: LLM-free here but tails still matter
+  mechanism:
+    - round_trips
+    - bytes_shipped              # across store boundaries, rows + bytes
+    - stage_latency              # ann / traverse / filter / merge
+    - intermediate_cardinality   # |seeds| / |reached| / |cand|
+    - serialization_fraction
+
+# The hardcoded plan real systems ship, for the "default plan suboptimality" metric.
+# GraphRAG-style: fixed top-k, fixed 2-hop, filter applied after expansion.
+default_plan:
+  shape: vector_first
+  k: 8
+  hops: 2
+  predicate_placement: post
+
+stop_conditions:
+  # trevillisPlan §6 P0. This is the ONLY stop condition this round (D1 narrowed it).
+  plan_spread_median_below: 2.0
+  # Recorded, but explicitly NOT a stop condition while the shape space has two elements.
+  shape_invariance_is_descriptive_only: true
