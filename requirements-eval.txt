@@ -1,0 +1,26 @@
+# Pinned runtime for the EvoTrace agent-outcome experiment (.venv-e0).
+#
+# numpy is pinned to 2.4.6, and that exact version is load-bearing:
+#
+#   1.26.4  what the corpus itself ran on. `np.cross` on 2-D vectors works, but
+#           jax refuses to import (`numpy.dtypes has no attribute StringDType`),
+#           which takes out the evaluators for all four *_autocorr_ineq /
+#           uncertainty_ineq tasks.
+#   2.4.6   jax imports, and 2-D `np.cross` still works (DeprecationWarning only).
+#           The only version where all seven math evaluators can run.
+#   2.5.1   jax imports, but 2-D `np.cross` was REMOVED. 210 of the 5,403 math
+#           programs in the corpus call it, so historical code stops scoring --
+#           including the best recorded program for heilbronn_convex_13, which is
+#           how this was found.
+#
+# Consequence to state in any report: our replayed scores are produced under a
+# DIFFERENT numpy than the recorded ones. tools/evotrace/gate_evaluator.py measures
+# exactly how far they drift; it is 0.0 for the deterministic geometric evaluators
+# and up to ~5e-3 for the optax-based ones.
+numpy==2.4.6
+scipy
+sympy
+jax[cpu]
+optax
+psycopg[binary]
+pgvector
