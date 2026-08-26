@@ -63,32 +63,42 @@ def _db(retriever, *, islands: int = 2, **kwargs) -> GemMemoryDatabase:
 
 
 def _seed(db: GemMemoryDatabase, n: int = 6) -> None:
+    """Seed with programs of DIFFERENT lengths.
+
+    MAP-Elites keys a cell on (complexity, diversity), and complexity is code length,
+    so identical-length programs collapse into one cell and `add()` keeps only the
+    winner: seeding six same-length programs leaves two in the database. Varying the
+    length is what makes the island actually hold what the test says it holds.
+    """
     for i in range(n):
         db.add(
             Program(
                 id=f"own{i}",
-                code=f"# own {i}\n",
+                code=f"# own {i}\n" * (2 ** i),
                 metrics={"combined_score": 0.1 * i},
             )
         )
 
 
-def test_injection_replaces_rather_than_adds() -> None:
-    """Arm A and arm B must render the same NUMBER of inspirations.
+def test_match_baseline_renders_the_same_count_as_arm_a() -> None:
+    """Under `match_baseline`, arm A and arm B render the same NUMBER of inspirations.
 
     If memory were appended, the prompt would grow and any outcome difference could be
-    explained by context length instead of memory quality.
+    explained by context length instead of memory quality. This is the conservative
+    policy; see `test_fixed_policy_injects_even_when_the_island_is_empty` for the cost.
     """
+    # One island so every seeded program lands in it: with the default 5, arm A itself
+    # renders nothing and the comparison would be vacuous (the guard below catches it).
     retriever = FakeRetriever(count=3)
-    db = _db(retriever)
-    _seed(db)
+    db = _db(retriever, islands=1, policy="match_baseline")
+    _seed(db, n=10)
     _, inspirations = db.sample_from_island(0, num_inspirations=5)
 
     # Same seed, same island, same count -- arm A is the reference for how many
     # inspirations the prompt renders, because the base class returns fewer than
     # `num_inspirations` whenever the island is small.
-    baseline = _db(NullRetriever())
-    _seed(baseline)
+    baseline = _db(NullRetriever(), islands=1)
+    _seed(baseline, n=10)
     _, own_only = baseline.sample_from_island(0, num_inspirations=5)
     assert len(inspirations) == len(own_only)
 
@@ -158,12 +168,12 @@ def test_trace_records_every_injected_id() -> None:
 
 def test_max_injected_caps_the_replacement() -> None:
     """The injection-rate knob must bound how much of the budget memory takes."""
-    db = _db(FakeRetriever(count=5), max_injected=2)
-    _seed(db)
+    db = _db(FakeRetriever(count=5), islands=1, max_injected=2, policy="match_baseline")
+    _seed(db, n=10)
     _, inspirations = db.sample_from_island(0, num_inspirations=5)
 
-    baseline = _db(NullRetriever())
-    _seed(baseline)
+    baseline = _db(NullRetriever(), islands=1)
+    _seed(baseline, n=10)
     _, own_only = baseline.sample_from_island(0, num_inspirations=5)
     assert len(inspirations) == len(own_only)
     assert sum(1 for p in inspirations if is_external(p.id)) == min(2, len(own_only))
@@ -175,3 +185,76 @@ def test_null_retriever_is_stock_behaviour() -> None:
     _, inspirations = db.sample_from_island(0, num_inspirations=5)
     assert not any(is_external(p.id) for p in inspirations)
     assert db.external_ids == set()
+
+
+def test_fixed_policy_injects_even_when_the_island_is_empty() -> None:
+    """The measured failure of `match_baseline`, pinned as a test.
+
+    With 5 islands and a nearly empty database the base class returns ZERO own
+    inspirations, so `match_baseline` injects nothing and arm B is byte-identical to
+    arm A -- observed for three straight iterations in the first live smoke run.
+    `fixed` is what makes the treatment exist during those iterations.
+    """
+    strict = _db(FakeRetriever(count=3), islands=5, policy="match_baseline")
+    strict.add(Program(id="only", code="# seed\n", metrics={"combined_score": 0.1}))
+    _, none_rendered = strict.sample_from_island(0, num_inspirations=5)
+    assert not [p for p in none_rendered if is_external(p.id)]
+
+    loose = _db(FakeRetriever(count=3), islands=5, policy="fixed")
+    loose.add(Program(id="only", code="# seed\n", metrics={"combined_score": 0.1}))
+    _, rendered = loose.sample_from_island(0, num_inspirations=5)
+    assert len([p for p in rendered if is_external(p.id)]) == 3
+
+
+def test_trace_records_what_was_rendered_not_what_was_retrieved() -> None:
+    """`injected_ids` must mean "reached the prompt".
+
+    The first implementation recorded the retrieved count, which reported
+    `injected=5, rendered=0` while nothing at all was being injected.
+    """
+    db = _db(FakeRetriever(count=3), islands=5, policy="match_baseline")
+    db.add(Program(id="only", code="# seed\n", metrics={"combined_score": 0.1}))
+    db.sample_from_island(0, num_inspirations=5)
+
+    row = db.injection_trace[-1]
+    assert row["retrieved"] == 3
+    assert row["injected_ids"] == []
+    assert row["rendered"] == len(row["own_ids"])
+
+
+def test_unknown_policy_is_rejected_at_construction() -> None:
+    with pytest.raises(ValueError, match="unknown injection policy"):
+        _db(NullRetriever(), policy="whatever")
+
+
+def test_fingerprint_is_always_a_substring_of_the_code() -> None:
+    """The standing proof that the gate cannot raise a false alarm.
+
+    The first implementation filtered uninteresting lines and joined the rest, which
+    welded `def f():` onto a docstring body with the quote line removed -- a string
+    that appears nowhere in the original. The injection gate then reported 100% of
+    programs absent from a prompt that visibly contained every one of them.
+    """
+    from bench.agent_memory.gem_oe.memory_database import code_fingerprint
+
+    samples = [
+        '# banner\n"""doc"""\nimport numpy as np\n\n\ndef f():\n    """\n    body\n    """\n    return 1\n',
+        "import os\nfrom pathlib import Path\n\n\nclass C:\n    x = 1\n",
+        "x = 1\ny = 2\nz = 3\n",
+        "",
+        "\n\n\n",
+        "# only comments\n# and more\n",
+    ]
+    for code in samples:
+        fingerprint = code_fingerprint(code)
+        assert fingerprint in code, f"not a substring of {code!r}: {fingerprint!r}"
+
+
+def test_fingerprint_skips_the_shared_preamble() -> None:
+    """Anchoring on `import numpy as np` would match essentially any program here."""
+    from bench.agent_memory.gem_oe.memory_database import code_fingerprint
+
+    fingerprint = code_fingerprint(
+        '# EVOLVE-BLOCK-START\n"""banner"""\nimport numpy as np\n\n\ndef pack():\n    return 26\n'
+    )
+    assert fingerprint.startswith("def pack():")

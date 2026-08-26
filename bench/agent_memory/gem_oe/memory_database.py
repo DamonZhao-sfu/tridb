@@ -35,6 +35,7 @@ silent breach here would corrupt every downstream number.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import random
 from dataclasses import dataclass, field
@@ -95,6 +96,38 @@ class NullRetriever:
         return []
 
 
+#: Lines that carry no identity: nearly every program in this corpus opens with the
+#: same imports and a banner comment, so a window anchored on them would match a
+#: prompt that never contained the injected program.
+SKIP_PREFIXES = ("#", "import ", "from ") + tuple(q * 3 for q in ('"', "'"))
+
+
+def code_fingerprint(code: str, *, lines: int = 3, chars: int = 120) -> str:
+    """A CONTIGUOUS slice of real code, for locating it inside a rendered prompt.
+
+    Contiguous is the whole point, and the first version got it wrong: it FILTERED
+    uninteresting lines and joined what was left, producing a string that never
+    appears anywhere in the original -- `def f():` welded onto a docstring body with
+    the intervening quote line removed. The gate then reported 100% of injections
+    absent from a prompt that visibly contained every one of them, which is exactly
+    the false alarm a hard gate must never raise.
+
+    So: skip forward to the first line that carries identity, then take the window
+    unmodified. The result is a substring of `code`, which `assert_is_substring`
+    below is the standing proof of.
+    """
+    rows = code.splitlines()
+    start = next(
+        (
+            i
+            for i, line in enumerate(rows)
+            if line.strip() and not line.lstrip().startswith(SKIP_PREFIXES)
+        ),
+        0,
+    )
+    return "\n".join(rows[start : start + lines])[:chars]
+
+
 class GemMemoryDatabase(ProgramDatabase):
     """`ProgramDatabase` whose inspirations may come from another session.
 
@@ -110,11 +143,15 @@ class GemMemoryDatabase(ProgramDatabase):
         retriever: Retriever,
         task_uid: str,
         max_injected: int | None = None,
+        policy: str = "fixed",
         **kwargs: Any,
     ) -> None:
         super().__init__(config, **kwargs)
+        if policy not in {"fixed", "match_baseline"}:
+            raise ValueError(f"unknown injection policy: {policy}")
         self._retriever = retriever
         self._task_uid = task_uid
+        self._policy = policy
         #: How many of the requested inspirations to replace. None = all of them.
         self._max_injected = max_injected
         self._external_ids: set[str] = set()
@@ -162,14 +199,32 @@ class GemMemoryDatabase(ProgramDatabase):
                 raise
 
         injected = [self._register(item) for item in retrieved]
-        # Replace, never append. The invariant is "the same NUMBER of inspirations arm
-        # A would have rendered", not "the number the caller asked for" -- the base
-        # class routinely returns fewer than `num_inspirations` (the island may hold
-        # too few programs, and the parent is excluded), so slicing to `wanted` would
-        # make arm B's prompt a different length from arm A's in exactly the cases
-        # where the island is small. Swap the first n entries and keep the rest.
-        n_replace = min(len(injected), len(own))
-        merged = injected[:n_replace] + own[n_replace:]
+
+        # Two defensible policies, and the choice changes what is being measured.
+        #
+        # `match_baseline` -- render exactly as many inspirations as arm A would, and
+        #   swap the first n for retrieved ones. Prompt length is identical across
+        #   arms, so no outcome difference can be blamed on context length. The cost
+        #   is real and was measured: with 5 islands and a nearly empty database the
+        #   base class returns ZERO own inspirations, so arm B injects nothing and is
+        #   byte-identical to arm A for exactly the early iterations where memory
+        #   should matter most.
+        #
+        # `fixed` -- render up to `budget` retrieved programs regardless of how many
+        #   the run itself can offer. Arm B's prompt is longer while the islands are
+        #   sparse. That asymmetry IS the treatment (memory supplies context the run
+        #   does not have), which is also how AlphaEvolve's own "No context in the
+        #   prompt" ablation is framed; it is reported per-iteration rather than
+        #   assumed away.
+        if self._policy == "match_baseline":
+            n_replace = min(len(injected), len(own))
+            merged = injected[:n_replace] + own[n_replace:]
+        elif self._policy == "fixed":
+            keep = max(0, len(own) - len(injected))
+            merged = injected + own[len(own) - keep:] if keep else injected + []
+        else:  # pragma: no cover - guarded at construction
+            raise ValueError(f"unknown injection policy: {self._policy}")
+        rendered_external = [p.id for p in merged if is_external(p.id)]
 
         self.injection_trace.append(
             {
@@ -179,7 +234,35 @@ class GemMemoryDatabase(ProgramDatabase):
                 "requested": wanted,
                 "rendered": len(merged),
                 "budget": budget,
-                "injected_ids": [p.id for p in injected],
+                "policy": self._policy,
+                "retrieved": len(retrieved),
+                # What actually reached the prompt, NOT what was retrieved. Recording
+                # the retrieved count here reported "injected=5, rendered=0" for three
+                # straight iterations while arm B was byte-identical to arm A.
+                "injected_ids": rendered_external,
+                # The corpus uids behind those ids. The prompt renders the CODE, not
+                # the id, so the assertion in gate_injection needs both.
+                "injected_uids": [
+                    p.metadata.get("uid", "") for p in merged if is_external(p.id)
+                ],
+                # What the PROMPT can actually be searched for. OpenEvolve's
+                # INSPIRATION_PROGRAM_TEMPLATE renders {program_snippet} and a score
+                # -- never the program id -- so an assertion that greps for the id
+                # fails on a run where injection worked perfectly.
+                "injected_fingerprints": [
+                    code_fingerprint(p.code) for p in merged if is_external(p.id)
+                ],
+                # Exact identity of what was injected. The agent-run analogue of
+                # `groundtruth.is_trivial_hit()`: that helper asks whether a retrieved
+                # candidate already exists in the TARGET SESSION, which cannot be
+                # asked here because the target session is this run and is not in the
+                # corpus. What can be asked is whether the program the agent produced
+                # is byte-identical to one it was handed, and that needs the hash.
+                "injected_sha256": [
+                    hashlib.sha256(p.code.encode("utf-8")).hexdigest()
+                    for p in merged
+                    if is_external(p.id)
+                ],
                 "own_ids": [p.id for p in merged if not is_external(p.id)],
                 "provenance": [item.provenance for item in retrieved],
                 "error": error,
@@ -189,9 +272,24 @@ class GemMemoryDatabase(ProgramDatabase):
 
     # -- registration ----------------------------------------------------
 
+    @staticmethod
+    def external_id(uid: str) -> str:
+        """A filesystem-safe id for a corpus node uid.
+
+        `ProgramDatabase.save()` writes one file per program id, so an id is a
+        FILENAME. Corpus uids look like
+        `349117b0:openevolve_native/circle_packing_..._056bfb#945f52e4-...`, whose `/`
+        is read as a directory separator -- checkpointing died with FileNotFoundError
+        on a path that had never been created. Hashing keeps the id short, safe and
+        stable; the real uid travels in `metadata["uid"]` and in the injection trace,
+        so nothing is lost.
+        """
+        digest = hashlib.sha1(uid.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        return f"{EXTERNAL_PREFIX}{digest}"
+
     def _register(self, item: RetrievedProgram) -> Program:
         """Put a retrieved program where the worker can resolve it, and nowhere else."""
-        pid = f"{EXTERNAL_PREFIX}{item.uid}"
+        pid = self.external_id(item.uid)
         existing = self.programs.get(pid)
         if existing is not None:
             return existing
@@ -203,7 +301,11 @@ class GemMemoryDatabase(ProgramDatabase):
             metrics=dict(item.metrics),
             # generation/iteration_found stay at 0 and parent_id at None: these belong
             # to another run's history and must not read as this run's lineage.
-            metadata={EXTERNAL_FLAG: True, "provenance": item.provenance},
+            metadata={
+                EXTERNAL_FLAG: True,
+                "uid": item.uid,
+                "provenance": item.provenance,
+            },
         )
         # `self.programs` only. Deliberately NOT: self.islands, self.archive,
         # self.feature_map, self.best_program_id, self.island_best_programs.

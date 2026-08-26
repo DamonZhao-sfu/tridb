@@ -39,33 +39,59 @@ MATH_TASKS = [
 RUNNER = "bench.agent_memory.gem_oe.run_arm"
 
 
-def cell_dir(out: Path, task: str, arm: str) -> Path:
-    return out / f"{task.replace(':', '_')}__{arm}"
+def cell_dir(out: Path, task: str, arm: str, rate: float | None = None) -> Path:
+    suffix = "" if rate is None else f"__r{int(round(rate * 100)):03d}"
+    return out / f"{task.replace(':', '_')}__{arm}{suffix}"
 
 
 def run_cell(
-    python: str, task: str, arm: str, endpoint: str, out: Path, extra: list[str]
+    python: str,
+    task: str,
+    arm: str,
+    endpoint: str,
+    out: Path,
+    extra: list[str],
+    timeout: float | None = None,
+    rate: float | None = None,
 ) -> dict[str, Any]:
-    target = cell_dir(out, task, arm)
+    target = cell_dir(out, task, arm, rate)
     target.mkdir(parents=True, exist_ok=True)
     cmd = [
         python, "-m", RUNNER,
         "--task", task, "--arm", arm,
         "--out", str(target),
         "--llm-base", endpoint,
+        *(["--injection-rate", str(rate)] if rate is not None else []),
         *extra,
     ]
     log = target / "cell.log"
     started = time.perf_counter()
+    timed_out = False
+    # A wall-clock cap on the cell, not politeness. OpenEvolve's own evaluator timeout
+    # fires (`Evaluation timed out after 900s`) but the run does NOT recover: the
+    # timed-out evaluation still holds its process-pool slot, and the cell then sits at
+    # 0% CPU forever. Four cells wedged that way for 75 minutes while reporting
+    # `status: running`, which is indistinguishable from slow progress unless something
+    # above them is watching the clock.
     with log.open("w", encoding="utf-8") as handle:
         handle.write(" ".join(cmd) + "\n\n")
         handle.flush()
-        proc = subprocess.run(cmd, stdout=handle, stderr=subprocess.STDOUT, env=None)
+        try:
+            proc = subprocess.run(
+                cmd, stdout=handle, stderr=subprocess.STDOUT, env=None, timeout=timeout
+            )
+            returncode = proc.returncode
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            returncode = -1
+            handle.write(f"\n\n[run_matrix] cell exceeded {timeout}s and was killed\n")
     return {
         "task": task,
         "arm": arm,
+        "rate": rate,
         "endpoint": endpoint,
-        "returncode": proc.returncode,
+        "returncode": returncode,
+        "timed_out": timed_out,
         "seconds": round(time.perf_counter() - started, 1),
         "out": str(target),
         "log": str(log),
@@ -78,6 +104,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--tasks", nargs="*", default=MATH_TASKS)
     ap.add_argument("--arms", nargs="+", default=["none", "gem"])
     ap.add_argument(
+        "--injection-rates", nargs="*", type=float, default=None,
+        help="fractions of the inspiration slots to fill from memory, e.g. "
+             "0.1 0.5 1.0. Each memory arm is expanded once per rate; arm `none` is "
+             "not, because it IS the 0%% point. Omit to run each memory arm once at "
+             "'fill every slot'.",
+    )
+    ap.add_argument(
         "--endpoints", nargs="+", default=["http://127.0.0.1:8001/v1"],
         help="one per serving replica; cells are pinned round-robin",
     )
@@ -85,27 +118,56 @@ def main(argv: list[str] | None = None) -> int:
         "--python", default=".venv-e0/bin/python",
         help="interpreter that has openevolve installed",
     )
+    ap.add_argument(
+        "--workers", type=int, default=None,
+        help="concurrent cells; defaults to one per endpoint. A single OpenEvolve run "
+             "is sequential -- it waits for one generation before starting the next -- "
+             "so one cell per replica leaves the GPU idle between requests. The "
+             "replica serves `--max-num-seqs` concurrent sequences, so several cells "
+             "can share it; raising this trades per-cell latency for utilisation.",
+    )
+    ap.add_argument(
+        "--cell-timeout", type=float, default=5400,
+        help="wall-clock cap per cell, in seconds. A completed cell took 26-36 min; "
+             "5400 leaves headroom for a slow evaluator while still killing a wedge. "
+             "The recorded corpus evaluations peak at ~600s, so a cell stuck far "
+             "beyond that is hung, not working.",
+    )
     ap.add_argument("--dry-run", action="store_true")
     args, extra = ap.parse_known_args(argv)
 
     args.out.mkdir(parents=True, exist_ok=True)
-    cells = [(t, a) for t in args.tasks for a in args.arms]
+    # arm `none` has no memory to meter, so it is the 0% point by construction and is
+    # never expanded over the rate axis -- doing so would run identical cells under
+    # different names.
+    cells: list[tuple[str, str, float | None]] = []
+    for task in args.tasks:
+        for arm in args.arms:
+            if arm == "none" or not args.injection_rates:
+                cells.append((task, arm, None))
+            else:
+                cells.extend((task, arm, rate) for rate in args.injection_rates)
     plan = [
-        (task, arm, args.endpoints[i % len(args.endpoints)])
-        for i, (task, arm) in enumerate(cells)
+        (task, arm, rate, args.endpoints[i % len(args.endpoints)])
+        for i, (task, arm, rate) in enumerate(cells)
     ]
     print(f"{len(plan)} cells over {len(args.endpoints)} replica(s)")
-    for task, arm, endpoint in plan:
-        print(f"  {task:<28} {arm:<10} -> {endpoint}")
+    for task, arm, rate, endpoint in plan:
+        label = arm if rate is None else f"{arm}@{rate:.0%}"
+        print(f"  {task:<28} {label:<14} -> {endpoint}")
     if args.dry_run:
         extra = [*extra, "--dry-run"]
 
     started = time.perf_counter()
-    # One worker per replica: more would queue requests behind each other on the same
-    # server and make every cell slower without finishing any sooner.
-    with ThreadPoolExecutor(max_workers=len(args.endpoints)) as pool:
+    workers = args.workers or len(args.endpoints)
+    print(f"{workers} concurrent cell(s)")
+    with ThreadPoolExecutor(max_workers=workers) as pool:
         results = list(pool.map(
-            lambda item: run_cell(args.python, item[0], item[1], item[2], args.out, extra),
+            lambda item: run_cell(
+                args.python, item[0], item[1], item[3], args.out, extra,
+                timeout=None if args.dry_run else args.cell_timeout,
+                rate=item[2],
+            ),
             plan,
         ))
 
@@ -114,17 +176,26 @@ def main(argv: list[str] | None = None) -> int:
         "cells": results,
         "cells_ok": len(ok),
         "cells_failed": len(results) - len(ok),
+        "cells_wedged": sum(1 for r in results if r.get("timed_out")),
         "wall_seconds": round(time.perf_counter() - started, 1),
         "arms": args.arms,
+        "injection_rates": args.injection_rates,
         "tasks": args.tasks,
         "endpoints": args.endpoints,
+        "workers": workers,
         "latency_claim": "NONE. Cells share the replicas; timings are progress only.",
     }
     (args.out / "matrix_summary.json").write_text(json.dumps(summary, indent=2))
     print()
     for row in results:
-        flag = "ok  " if row["returncode"] == 0 else f"FAIL({row['returncode']})"
-        print(f"  {flag} {row['task']:<28} {row['arm']:<10} {row['seconds']:>8.1f}s")
+        if row["returncode"] == 0:
+            flag = "ok  "
+        elif row.get("timed_out"):
+            flag = "WEDGED"
+        else:
+            flag = f"FAIL({row['returncode']})"
+        label = row["arm"] if row.get("rate") is None else f"{row['arm']}@{row['rate']:.0%}"
+        print(f"  {flag} {row['task']:<28} {label:<14} {row['seconds']:>8.1f}s")
     print(f"\n{len(ok)}/{len(results)} cells ok -> {args.out / 'matrix_summary.json'}")
     return 0 if len(ok) == len(results) else 1
 

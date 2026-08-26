@@ -14,9 +14,12 @@ as `seed="node"` for a separate experiment -- never mixed into the same results 
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any
+
+import numpy as np
 
 from openevolve.database import Program
 
@@ -132,6 +135,7 @@ class GemRetriever:
         ).fetchall()
         by_uid = {r[0]: r for r in rows}
         out: list[RetrievedProgram] = []
+        missing_changes = 0
         for uid in uids:
             row = by_uid.get(uid)
             if row is None:
@@ -141,6 +145,13 @@ class GemRetriever:
                 logger.warning("retrieved node %s has no payload; dropped", uid)
                 continue
             metrics = row[3] if isinstance(row[3], dict) else {}
+            # 4,443 of the 5,403 math programs carry an edit description; the rest
+            # render as `<missing changes_description>` under `--inject-as changes`.
+            # Counted rather than dropped: dropping would silently shrink the
+            # injection below the requested rate, and the rate is an experimental
+            # variable.
+            if not (row[4] or "").strip():
+                missing_changes += 1
             out.append(
                 RetrievedProgram(
                     uid=uid,
@@ -158,6 +169,8 @@ class GemRetriever:
                     },
                 )
             )
+        if self.telemetry:
+            self.telemetry[-1]["missing_changes"] = missing_changes
         return out
 
 
@@ -183,7 +196,16 @@ class PolyglotRetriever:
         self, *, task_uid: str, parent: Program, k: int, iteration: int
     ) -> list[RetrievedProgram]:
         spec = self.gem._spec(task_uid, parent, k, iteration)
-        uids, telemetry = self.backend.reuse_query(spec)
+        # The seed vector comes from GEM's own identity map, so both arms rank against
+        # a byte-identical query vector. Re-embedding here would introduce a second
+        # source of truth for the same numbers -- the failure that once drove W1.a's
+        # parity from 0.963 to 0.000 with no error raised.
+        literal = self.gem._engine._vectors.get(spec.seed_uid)
+        if literal is None:
+            raise RuntimeError(f"no seed vector for {spec.seed_uid}")
+        query_vec = np.asarray(json.loads(literal), dtype=np.float32)
+        query_vec /= np.linalg.norm(query_vec) or 1.0
+        uids, telemetry = self.backend.reuse_query(spec, query_vec)
         self.telemetry.append({"iteration": iteration, "returned": len(uids), **telemetry})
         if not uids:
             # Never scored as "memory had nothing": an empty result from a multi-system

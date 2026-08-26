@@ -39,19 +39,49 @@ DEFAULT_RAW = Path("data/evotrace/raw")
 #: Frozen across every arm. Anything here that differed between two cells would be a
 #: confound, so the receipt records the resolved values, not just the intent.
 FROZEN = {
-    "max_iterations": 100,
     "random_seed": 42,
     "diff_based_evolution": True,
     "num_top_programs": 3,
-    "num_diverse_programs": 5,
+    # 10, not OpenEvolve's default 2. This is the denominator of the injection rate:
+    # the sweep needs 0% / 10% / 50% to land on whole programs, and 10 slots give
+    # 0 / 1 / 5. It is frozen across every arm, so the no-memory arm renders the same
+    # number of slots -- it just fills all of them from its own run.
+    "num_diverse_programs": 10,
     "num_islands": 5,
     "population_size": 1000,
     "archive_size": 100,
     "migration_interval": 50,
     "cascade_evaluation": False,
-    "temperature": 0.0,
-    "top_p": 1.0,
-    "max_tokens": 16384,
+    # 0.7, not 0.0. Deterministic decoding was chosen first, for reproducibility, and
+    # it destroyed the experiment: with T=0 and five high-scoring programs in the
+    # prompt, reproducing one verbatim IS the argmax. Measured on the abandoned run
+    # (bench/out/oe/ABANDONED_phase2_T0_copycollapse_*): the memory arm emitted 15
+    # distinct programs in 30 iterations against the no-memory arm's 30, and its
+    # child code appeared verbatim in its own prompt 10 times out of 30. It jumped
+    # once and then repeated itself.
+    #
+    # The corpus's own runs used 1.0 / 0.7 / 0.3 -- second_autocorr_ineq carries a
+    # temperature ablation group -- so T=0 was never a normal setting for this kind
+    # of evolutionary search. Reproducibility here comes from the fixed random_seed,
+    # which OpenEvolve propagates into the LLM config, not from collapsing the
+    # sampling distribution.
+    "temperature": 0.7,
+    # 1.0 was chosen alongside T=0; with sampling actually on, top_p=1.0 leaves the
+    # full tail in play. 0.95 is OpenEvolve's own shape for a sampling run.
+    "top_p": 0.95,
+    # 8192, down from 16384. The serving replica is `--max-model-len 65536`, and the
+    # prompt now carries up to 10 injected programs on top of the run's own context:
+    # a 16k output reservation would push long prompts past the window and fail the
+    # iteration rather than truncate it. The corpus's completions are p50 3,615 and
+    # p90 10,473, so 8192 covers the bulk while leaving 57k for input.
+    "max_tokens": 8192,
+    # 40, down from 100. Measured on the corpus: circle_packing reaches 100% of its
+    # final score by iteration 40, and the four low-headroom tasks are at >=98.7% by
+    # iteration 10. The heilbronn pair is still climbing at 40, which is why the
+    # budget is not cut further -- the primary metric is time-to-threshold and needs
+    # resolution there. Iterations beyond 40 contributed nothing to any threshold
+    # event in the v0.2.0 run.
+    "max_iterations": 40,
 }
 
 
@@ -80,14 +110,52 @@ def build_config(config_cls: Any, args: argparse.Namespace) -> Any:
 
     cfg.llm.api_base = args.llm_base
     cfg.llm.api_key = "EMPTY"
-    cfg.llm.name = args.llm_model
     cfg.llm.temperature = FROZEN["temperature"]
     cfg.llm.top_p = FROZEN["top_p"]
     cfg.llm.max_tokens = FROZEN["max_tokens"]
-    cfg.llm.models = []
+    # `LLMEnsemble` indexes `models_cfg` directly, so an empty list is not "use the
+    # top-level settings" -- it is `list index out of range` on the first generation,
+    # logged once per iteration and otherwise survivable, which is how a whole 100
+    # iteration run completed in 90 seconds without calling the model at all.
+    from openevolve.config import LLMModelConfig
 
-    cfg.prompt.num_top_programs = FROZEN["num_top_programs"]
-    cfg.prompt.num_diverse_programs = FROZEN["num_diverse_programs"]
+    cfg.llm.models = [
+        LLMModelConfig(
+            name=args.llm_model,
+            api_base=args.llm_base,
+            api_key="EMPTY",
+            weight=1.0,
+            temperature=FROZEN["temperature"],
+            top_p=FROZEN["top_p"],
+            max_tokens=FROZEN["max_tokens"],
+            timeout=args.llm_timeout,
+            retries=3,
+        )
+    ]
+    cfg.llm.evaluator_models = list(cfg.llm.models)
+
+    # `nocontext` is the true zero-reference lower bound: no inspirations AND no
+    # top/previous programs. Without it, the "no memory" arm still renders up to
+    # `num_top_programs` of the run's own output, so a comparison against it answers
+    # "which SOURCE of references is better" and never "do references help at all".
+    #
+    # Set here, not by returning early -- an early return would skip the LLM,
+    # evaluator and trace configuration below and produce a cell that never calls a
+    # model, which is the failure this file already carries a warning about.
+    zero_context = args.arm == "nocontext"
+    cfg.prompt.num_top_programs = 0 if zero_context else FROZEN["num_top_programs"]
+    cfg.prompt.num_diverse_programs = (
+        0 if zero_context else (args.num_diverse or FROZEN["num_diverse_programs"])
+    )
+    # `changes` renders each inspiration's `changes_description` ("switched to greedy
+    # sequential placement") instead of its source. Physically unable to be copied,
+    # which is the point: the retrieval predicate hands back programs that are
+    # strictly BETTER than what the agent holds, and with the code visible, copying
+    # one is the agent's optimal move rather than a defect. Measured at 21.8% of
+    # iterations on the first full pair. Injecting the edit instead is what the
+    # Experience Graph paper means by reuse, and it is the same retrieval either way,
+    # so the two modes isolate "reuse the answer" from "reuse the method".
+    cfg.prompt.programs_as_changes_description = args.inject_as == "changes"
 
     cfg.database.num_islands = FROZEN["num_islands"]
     cfg.database.population_size = FROZEN["population_size"]
@@ -116,7 +184,7 @@ def build_config(config_cls: Any, args: argparse.Namespace) -> Any:
 def build_retriever(args: argparse.Namespace) -> Any:
     from bench.agent_memory.gem_oe.memory_database import NullRetriever
 
-    if args.arm == "none":
+    if args.arm in ("none", "nocontext"):
         return NullRetriever()
 
     from bench.agent_memory.gem_eg.store import EgStore
@@ -133,14 +201,17 @@ def build_retriever(args: argparse.Namespace) -> Any:
     if args.arm == "gem":
         return gem
     if args.arm == "polyglot":
+        from bench.agent_memory.gem_oe.polyglot_backend import PolyglotBackend
         from bench.agent_memory.gem_oe.retrievers import PolyglotRetriever
 
-        raise SystemExit(
-            "arm 'polyglot' needs a live Milvus+Neo4j+pgvector stack and a passing "
-            "parity gate against GEM; wire the backend into PolyglotRetriever and "
-            "run tools/evotrace/gate_polyglot_parity.py first. "
-            f"({PolyglotRetriever.__name__} is written and ready.)"
-        )
+        receipt_path = Path(args.polyglot_receipt)
+        if not receipt_path.is_file():
+            raise SystemExit(
+                f"no polyglot load receipt at {receipt_path}. The E0 polyglot numbers "
+                "were retracted because measurement began before the loader finished; "
+                "run tools/evotrace/load_polyglot.py first."
+            )
+        return PolyglotRetriever(backend=PolyglotBackend(), gem=gem)
     raise SystemExit(f"unknown arm: {args.arm}")
 
 
@@ -235,7 +306,12 @@ def resolve_task(dsn: str, task_uid: str, raw: Path) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--task", required=True, help="e.g. math:circle_packing")
-    ap.add_argument("--arm", required=True, choices=["none", "gem", "polyglot"])
+    ap.add_argument(
+        "--arm", required=True,
+        choices=["nocontext", "none", "gem", "polyglot"],
+        help="nocontext: no references at all (true lower bound). none: the run's own "
+             "programs only, no external memory. gem/polyglot: external memory.",
+    )
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--dsn", default=DEFAULT_DSN)
     ap.add_argument("--scope", default=DEFAULT_SCOPE)
@@ -246,8 +322,38 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--split", default="same_task", choices=["same_task", "cross_task"])
     ap.add_argument("--seed-layer", default="task", choices=["task", "node"])
     ap.add_argument("--m-seeds", type=int, default=4)
+    ap.add_argument("--polyglot-receipt", default="bench/out/polyglot/load_receipt.json")
+    ap.add_argument(
+        "--injection-rate", type=float, default=None,
+        help="fraction of the inspiration slots to fill from memory, in [0,1]. "
+             "With the frozen 10 slots, 0.1 -> 1 program and 0.5 -> 5. Omit for "
+             "'fill every slot'. Arm `none` is the 0.0 point by construction, so "
+             "this only means anything for a memory arm.",
+    )
+    ap.add_argument(
+        "--inject-as", default="code", choices=["code", "changes"],
+        help="what the prompt renders for each injected program: its source (`code`) "
+             "or its edit description (`changes`). See build_config for why this is "
+             "an experimental axis rather than a formatting preference.",
+    )
+    ap.add_argument(
+        "--num-diverse", type=int, default=None,
+        help="override the frozen inspiration-slot count. Changing it changes the "
+             "injection-rate denominator, so it must be identical across every cell "
+             "that will appear in one table.",
+    )
+    ap.add_argument(
+        "--injection-policy", default="fixed", choices=["fixed", "match_baseline"],
+        help="fixed: render up to num_diverse_programs retrieved programs regardless "
+             "of how many the run itself offers. match_baseline: render exactly as "
+             "many as arm A would, which makes prompt length identical but injects "
+             "NOTHING while the islands are still sparse. See memory_database.py.",
+    )
     ap.add_argument("--seed", type=int, default=None, help="overrides the frozen 42")
     ap.add_argument("--eval-timeout", type=int, default=900)
+    ap.add_argument("--llm-timeout", type=int, default=1800,
+                    help="the corpus p99 prompt is 66k tokens; a short timeout would "
+                         "silently turn long prompts into failed iterations")
     ap.add_argument("--checkpoint-interval", type=int, default=10)
     ap.add_argument("--dry-run", action="store_true",
                     help="resolve everything and write the receipt, run no iterations")
@@ -264,13 +370,24 @@ def main(argv: list[str] | None = None) -> int:
     seed_path = args.out / "initial_program.py"
     seed_path.write_text(task["seed_code"], encoding="utf-8")
 
+    slots = cfg.prompt.num_diverse_programs
+    max_injected = (
+        None if args.injection_rate is None
+        else int(round(args.injection_rate * slots))
+    )
+
     receipt: dict[str, Any] = {
-        "schema_version": "oe_arm_run_v0.1.0",
+        "schema_version": "oe_arm_run_v0.2.0",
         "task_uid": args.task,
         "arm": args.arm,
         "retriever": retriever.name,
         "split": args.split,
         "seed_layer": args.seed_layer,
+        "injection_policy": args.injection_policy,
+        "inject_as": args.inject_as,
+        "injection_slots": slots,
+        "injection_rate_requested": args.injection_rate,
+        "max_injected": max_injected,
         "frozen": FROZEN,
         "resolved_seed": cfg.random_seed,
         "evaluator": task["evaluator"],
@@ -301,7 +418,11 @@ def main(argv: list[str] | None = None) -> int:
     # `database=self.database` in __init__, so replacing only `controller.database`
     # leaves the evaluator writing artifacts into the discarded instance.
     memory_db = GemMemoryDatabase(
-        cfg.database, retriever=retriever, task_uid=args.task
+        cfg.database,
+        retriever=retriever,
+        task_uid=args.task,
+        policy=args.injection_policy,
+        max_injected=max_injected,
     )
     controller.database = memory_db
     controller.evaluator.database = memory_db
@@ -309,13 +430,29 @@ def main(argv: list[str] | None = None) -> int:
     try:
         asyncio.run(controller.run())
         receipt["status"] = "complete"
+        # Provisional: the real check is in the `finally` block, because
+        # `controller.run()` returning is NOT proof the run happened. When an
+        # evaluator times out, OpenEvolve stops without raising, and six cells
+        # recorded `status: complete` after 5 to 16 of their 100 iterations. A
+        # receipt that says "complete" for a 5-iteration run is worse than one that
+        # says "failed": it silently enters the results table.
     except BaseException as exc:  # noqa: BLE001 - the reason must reach the receipt
         receipt["status"] = "failed"
         receipt["error"] = f"{type(exc).__name__}: {exc}"
         raise
     finally:
         receipt["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-        receipt["iterations_traced"] = len(memory_db.injection_trace)
+        traced = len(memory_db.injection_trace)
+        receipt["iterations_traced"] = traced
+        receipt["iterations_expected"] = cfg.max_iterations
+        receipt["completion_fraction"] = round(traced / cfg.max_iterations, 4)
+        if receipt["status"] == "complete" and traced < cfg.max_iterations * 0.9:
+            receipt["status"] = "incomplete"
+            receipt["error"] = (
+                f"only {traced}/{cfg.max_iterations} iterations ran. OpenEvolve "
+                "returned without raising -- an evaluator timeout stops the loop "
+                "silently -- so this cell must not be read as a finished run."
+            )
         receipt["own_programs"] = len(memory_db.own_programs())
         receipt["injected_programs"] = len(memory_db.external_ids)
         (args.out / "run_receipt.json").write_text(json.dumps(receipt, indent=2))

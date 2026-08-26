@@ -27,10 +27,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-# Injected ids carry this prefix; it is also what makes them greppable in a prompt.
-# Imported from `constants` rather than `memory_database` so this gate does not pull in
-# `openevolve`: the gates run under the repo venv, the runner under `.venv-e0`.
-from bench.agent_memory.gem_oe.constants import EXTERNAL_PREFIX
 
 
 def _iter_prompts(run: Path) -> dict[int, str]:
@@ -72,15 +68,29 @@ def check(run: Path, *, allow_missing_fraction: float = 0.0) -> dict[str, Any]:
         if text is None:
             no_prompt.append(row["iteration"])
             continue
-        for pid in ids:
+        uids = row.get("injected_uids") or []
+        prints = row.get("injected_fingerprints") or []
+        if not prints:
+            # Older traces predate the fingerprint field. Refuse rather than fall back
+            # to matching on the id: OpenEvolve's inspiration template renders only
+            # `{program_snippet}` and a score, so an id-based check reports 100%
+            # absent on a run where every injection landed correctly -- a false alarm
+            # indistinguishable from the real failure this gate exists to catch.
+            raise SystemExit(
+                f"{run}: injection trace has no `injected_fingerprints`. Re-run with "
+                "a build that records them; matching on program ids cannot work, "
+                "because the prompt never contains an id."
+            )
+        for index, pid in enumerate(ids):
             checked += 1
-            # Match on the corpus uid, not the whole prefixed id: the prompt renders
-            # the program, and the id may appear in a different form or not at all,
-            # so the code's own identity is what must be present. The uid is embedded
-            # in the id after the prefix.
-            uid = pid[len(EXTERNAL_PREFIX):]
-            if pid not in text and uid not in text:
-                absent.append({"iteration": row["iteration"], "program_id": pid})
+            fingerprint = prints[index] if index < len(prints) else ""
+            if not fingerprint or fingerprint not in text:
+                absent.append({
+                    "iteration": row["iteration"],
+                    "program_id": pid,
+                    "uid": uids[index] if index < len(uids) else "",
+                    "fingerprint": fingerprint[:60],
+                })
 
     total_injected = sum(len(r.get("injected_ids") or []) for r in injections)
     result = {
