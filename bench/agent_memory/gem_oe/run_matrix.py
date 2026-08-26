@@ -143,7 +143,13 @@ def main(argv: list[str] | None = None) -> int:
     cells: list[tuple[str, str, float | None]] = []
     for task in args.tasks:
         for arm in args.arms:
-            if arm == "none" or not args.injection_rates:
+            # `nocontext` and `none` both inject nothing, so expanding them over the
+            # rate axis runs the same configuration under different names. (The first
+            # 7-task launch did exactly that and produced three identical nocontext
+            # cells per task -- useful by accident, as near-replicates under T=0.7
+            # give the run-to-run variance a single seed cannot, but not what the
+            # matrix was asked for.)
+            if arm in ("none", "nocontext") or not args.injection_rates:
                 cells.append((task, arm, None))
             else:
                 cells.extend((task, arm, rate) for rate in args.injection_rates)

@@ -156,6 +156,17 @@ def build_config(config_cls: Any, args: argparse.Namespace) -> Any:
     # Experience Graph paper means by reuse, and it is the same retrieval either way,
     # so the two modes isolate "reuse the answer" from "reuse the method".
     cfg.prompt.programs_as_changes_description = args.inject_as == "changes"
+    if args.inject_as == "changes":
+        # The mode is a two-sided contract, and the first attempt only honoured one
+        # side: it changed what the prompt RENDERS, but OpenEvolve also requires the
+        # model to return a diff against the parent's changes_description and
+        # DISCARDS any program whose description was not updated
+        # (process_parallel.py:246-252). With the seed carrying an empty description
+        # there was nothing to diff against, so all 40 iterations of all 9 cells were
+        # thrown away and every cell reported its seed score as its best.
+        cfg.prompt.initial_changes_description = (
+            "Initial program: the task's original starting implementation, unmodified."
+        )
 
     cfg.database.num_islands = FROZEN["num_islands"]
     cfg.database.population_size = FROZEN["population_size"]
