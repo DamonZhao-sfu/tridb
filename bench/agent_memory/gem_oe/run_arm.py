@@ -361,7 +361,19 @@ def main(argv: list[str] | None = None) -> int:
              "NOTHING while the islands are still sparse. See memory_database.py.",
     )
     ap.add_argument("--seed", type=int, default=None, help="overrides the frozen 42")
-    ap.add_argument("--eval-timeout", type=int, default=900)
+    ap.add_argument(
+        "--eval-timeout", type=int, default=240,
+        help="hard deadline for one evaluation, enforced by the subprocess wrapper. "
+             "240s: the corpus's own evaluations peak at ~600s, but a generated "
+             "program that runs longer than 240 is pathological rather than slow, "
+             "and every second past the deadline is a worker not doing anything.",
+    )
+    ap.add_argument(
+        "--no-wrap-evaluator", dest="wrap_evaluator", action="store_false",
+        help="call the task's evaluator directly. Only for comparing against the "
+             "unwrapped behaviour -- OpenEvolve's timeout does not stop a running "
+             "evaluation, so an expensive generated program wedges the whole cell.",
+    )
     ap.add_argument("--llm-timeout", type=int, default=1800,
                     help="the corpus p99 prompt is 66k tokens; a short timeout would "
                          "silently turn long prompts into failed iterations")
@@ -380,6 +392,24 @@ def main(argv: list[str] | None = None) -> int:
 
     seed_path = args.out / "initial_program.py"
     seed_path.write_text(task["seed_code"], encoding="utf-8")
+
+    # Wrap the evaluator so a runaway program can actually be killed. OpenEvolve's own
+    # timeout cannot do it: `evaluator.py:351` dispatches with
+    # `loop.run_in_executor(None, ...)` and bounds it with `asyncio.wait_for`, which
+    # cancels the awaitable while the thread keeps running the evaluator forever. Two
+    # such leaks exhaust the pool and the run goes silent -- observed on four tasks
+    # across three attempts, always after exactly two timeouts, always reporting
+    # `status: complete` with no data.
+    evaluator_path = task["evaluator"]
+    if args.wrap_evaluator:
+        from tools.evotrace.wrap_evaluator import TEMPLATE
+
+        wrapped = args.out / "wrapped_evaluator.py"
+        wrapped.write_text(
+            TEMPLATE.format(evaluator=evaluator_path, timeout=args.eval_timeout),
+            encoding="utf-8",
+        )
+        evaluator_path = str(wrapped)
 
     slots = cfg.prompt.num_diverse_programs
     max_injected = (
@@ -402,6 +432,7 @@ def main(argv: list[str] | None = None) -> int:
         "frozen": FROZEN,
         "resolved_seed": cfg.random_seed,
         "evaluator": task["evaluator"],
+        "evaluator_wrapped": bool(args.wrap_evaluator),
         "seed_node_uid": task["seed_node_uid"],
         "seed_fitness": task["seed_fitness"],
         "seed_artifact_uid": task["seed_artifact_uid"],
@@ -421,7 +452,7 @@ def main(argv: list[str] | None = None) -> int:
 
     controller = controller_cls(
         initial_program_path=str(seed_path),
-        evaluation_file=task["evaluator"],
+        evaluation_file=evaluator_path,
         config=cfg,
         output_dir=str(args.out / "openevolve"),
     )
