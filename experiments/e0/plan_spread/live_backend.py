@@ -22,18 +22,39 @@ def _bytes(values: list[Any]) -> int:
 
 
 class ShipCounter:
-    """Counts rows, bytes, and serialization time crossing a store boundary."""
+    """Counts intermediate ID payloads crossing named store boundaries."""
 
     def __init__(self) -> None:
         self.rows = 0
         self.bytes = 0
         self.serialization_ms = 0.0
+        self.rows_by_boundary: dict[str, int] = {}
+        self.bytes_by_boundary: dict[str, int] = {}
+        self.serialization_ms_by_boundary: dict[str, float] = {}
 
-    def add(self, values: list[Any]) -> None:
+    def add(self, boundary: str | list[Any], values: list[Any] | None = None) -> None:
+        # Keep E0's historical add(values) call valid while E1 supplies a named
+        # boundary. Existing E0 artifacts remain readable and tests do not need
+        # to pretend they had boundary-level instrumentation.
+        if values is None:
+            values = boundary
+            boundary = "unspecified"
+        if not isinstance(boundary, str):
+            raise TypeError("boundary must be a string when values are supplied")
         started = time.perf_counter_ns()
-        self.rows += len(values)
-        self.bytes += _bytes(values)
-        self.serialization_ms += _ms(started)
+        rows = len(values)
+        size = _bytes(values)
+        elapsed = _ms(started)
+        self.rows += rows
+        self.bytes += size
+        self.serialization_ms += elapsed
+        self.rows_by_boundary[boundary] = self.rows_by_boundary.get(boundary, 0) + rows
+        self.bytes_by_boundary[boundary] = (
+            self.bytes_by_boundary.get(boundary, 0) + size
+        )
+        self.serialization_ms_by_boundary[boundary] = (
+            self.serialization_ms_by_boundary.get(boundary, 0.0) + elapsed
+        )
 
 
 def _identifier(value: str) -> str:
@@ -74,6 +95,7 @@ def _empty_stores(*, milvus: int, neo4j: int, postgres: int) -> list[str]:
 _POLYGLOT_LOADERS: dict[str, str] = {
     "openevolve": "make e0-openevolve-polyglot-load",
     "stark_prime": "python -m tools.e0.load_polyglot all",
+    "stark_mag": "python -m tools.e0.load_stark_mag_polyglot all",
 }
 
 
@@ -103,6 +125,9 @@ class PolyglotLiveDataset:
         self.label = _identifier(str(live["neo4j_label"]))
         self.table = _identifier(str(live["postgres_table"]))
         self.id_type = str(live["id_type"])
+        self.ann_effort = int(live.get("ann_effort", 100))
+        if self.ann_effort <= 0:
+            raise ValueError("live.ann_effort must be positive")
         connections.connect(alias=f"e0_{name}", host="127.0.0.1", port="19530")
         self.collection = Collection(str(live["milvus_collection"]), using=f"e0_{name}")
         self.collection.load()
@@ -125,6 +150,11 @@ class PolyglotLiveDataset:
             autocommit=True,
         )
         with self.pg.cursor() as cursor:
+            cursor.execute("SET hnsw.iterative_scan = relaxed_order")
+            cursor.execute(
+                "SELECT set_config('hnsw.ef_search', %s, false)",
+                (str(self.ann_effort),),
+            )
             cursor.execute(f"SELECT count(*) FROM {self.table}")
             postgres_count = cursor.fetchone()[0]
 
@@ -158,6 +188,16 @@ class PolyglotLiveDataset:
         self.pg.close()
         self.neo_driver.close()
 
+    def set_ann_effort(self, effort: int) -> None:
+        if effort <= 0:
+            raise ValueError("ANN effort must be positive")
+        self.ann_effort = int(effort)
+        with self.pg.cursor() as cursor:
+            cursor.execute(
+                "SELECT set_config('hnsw.ef_search', %s, false)",
+                (str(self.ann_effort),),
+            )
+
     def load_queries(self, path: Path) -> list[QuerySpec]:
         return [
             QuerySpec.from_mapping(json.loads(line))
@@ -180,7 +220,10 @@ class PolyglotLiveDataset:
         result = self.collection.search(
             data=[self.query_vectors[query.query_id].tolist()],
             anns_field="embedding",
-            param={"metric_type": "COSINE", "params": {"ef": max(64, k)}},
+            param={
+                "metric_type": "COSINE",
+                "params": {"ef": max(self.ann_effort, k)},
+            },
             limit=k,
         )
         return [hit.id for hit in result[0]]
@@ -333,13 +376,15 @@ class PolyglotLiveDataset:
             stages["ann_ms"] = _ms(stage)
             round_trips += 1
             cardinality["seeds"] = len(seeds)
-            counter.add(seeds)
+            counter.add("milvus_to_orchestrator", seeds)
             if plan.predicate_placement == "during":
+                counter.add("orchestrator_to_postgres", seeds)
                 stage = time.perf_counter_ns()
                 seeds = self._pg_filter(query, seeds)
                 stages["filter_ms"] = _ms(stage)
                 round_trips += 1
-                counter.add(seeds)
+                counter.add("postgres_to_orchestrator", seeds)
+            counter.add("orchestrator_to_neo4j", seeds)
             stage = time.perf_counter_ns()
             candidates = self._neo_reach(
                 query, plan.hops, restrict_ids=seeds, apply_predicate=False
@@ -347,13 +392,14 @@ class PolyglotLiveDataset:
             stages["traverse_ms"] = _ms(stage)
             round_trips += 1
             cardinality["reached"] = len(candidates)
-            counter.add(candidates)
+            counter.add("neo4j_to_orchestrator", candidates)
             if plan.predicate_placement == "post":
+                counter.add("orchestrator_to_postgres", candidates)
                 stage = time.perf_counter_ns()
                 candidates = self._pg_filter(query, candidates)
                 stages["filter_ms"] = _ms(stage)
                 round_trips += 1
-                counter.add(candidates)
+                counter.add("postgres_to_orchestrator", candidates)
             rank = {node_id: idx for idx, node_id in enumerate(seeds)}
             candidates.sort(key=lambda node_id: rank.get(node_id, len(rank)))
 
@@ -364,7 +410,8 @@ class PolyglotLiveDataset:
             stages["ann_ms"] = stages["filter_ms"]
             round_trips += 1
             cardinality["seeds"] = len(seeds)
-            counter.add(seeds)
+            counter.add("postgres_to_orchestrator", seeds)
+            counter.add("orchestrator_to_neo4j", seeds)
             stage = time.perf_counter_ns()
             candidates = self._neo_reach(
                 query, plan.hops, restrict_ids=seeds, apply_predicate=False
@@ -372,7 +419,7 @@ class PolyglotLiveDataset:
             stages["traverse_ms"] = _ms(stage)
             round_trips += 1
             cardinality["reached"] = len(candidates)
-            counter.add(candidates)
+            counter.add("neo4j_to_orchestrator", candidates)
             rank = {node_id: idx for idx, node_id in enumerate(seeds)}
             candidates.sort(key=lambda node_id: rank.get(node_id, len(rank)))
 
@@ -387,12 +434,13 @@ class PolyglotLiveDataset:
             stages["traverse_ms"] = _ms(stage)
             round_trips += 1
             cardinality["reached"] = len(reached)
-            counter.add(reached)
+            counter.add("neo4j_to_orchestrator", reached)
+            counter.add("orchestrator_to_postgres", reached)
             stage = time.perf_counter_ns()
             candidates = self._pg_rank(query, plan.k, reached)
             stages["ann_ms"] = _ms(stage)
             round_trips += 1
-            counter.add(candidates)
+            counter.add("postgres_to_orchestrator", candidates)
         else:  # pragma: no cover
             raise ValueError(f"unknown shape {plan.shape}")
 
@@ -409,9 +457,17 @@ class PolyglotLiveDataset:
             "stage_latency_ms": stages,
             "intermediate_cardinality": cardinality,
             "round_trips": round_trips,
+            "client_query_round_trips": 1,
+            "store_rpc_count": round_trips,
+            "cross_store_handoff_count": max(0, round_trips - 1),
             "bytes_shipped": counter.bytes,
             "rows_shipped": counter.rows,
+            "intermediate_rows_by_boundary": counter.rows_by_boundary,
+            "payload_bytes_by_boundary": counter.bytes_by_boundary,
             "serialization_ms": counter.serialization_ms,
+            "serialization_ms_by_boundary": counter.serialization_ms_by_boundary,
+            "payload_measurement": "json_encoded_intermediate_id_lists",
+            "ann_effort": self.ann_effort,
             "serialization_fraction": (
                 0.0 if latency_ms == 0 else counter.serialization_ms / latency_ms
             ),

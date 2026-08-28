@@ -239,6 +239,51 @@ class TestLLMMediatedPlanning:
         assert ops == []
         assert strategy.rejections[0]["gate"] == "json"
 
+    def test_a_hallucinated_host_id_is_rejected_before_the_transaction(self):
+        strategy = LLMMediatedIngestStrategy(
+            client=ScriptedClient([_extraction(host={"unit_id": 1})]),
+            model="m",
+            chunker=FakeChunker(),
+            embedder=FakeEmbedder(),
+        )
+
+        ops = strategy.plan([_event()], FakeView())
+
+        assert ops == []
+        assert strategy.rejections[0]["gate"] == "referential"
+        assert "candidate_topics" in strategy.rejections[0]["detail"]
+
+    def test_batch_rejects_a_cross_chunk_duplicate_current_field(self):
+        strategy = LLMMediatedIngestStrategy(
+            client=ScriptedClient([_extraction(), _extraction()]),
+            model="m",
+            mode=MODE_BATCH,
+            chunker=FakeChunker(2),
+            embedder=FakeEmbedder(),
+        )
+
+        ops = strategy.plan([_event()], FakeView())
+
+        facts = [op for op in ops if op["kind"] == planmod.APPEND_FIELD_VALUE]
+        assert len(facts) == 1
+        assert strategy.rejections[0]["gate"] == "conflict"
+
+    def test_sequential_supersedes_a_cross_chunk_duplicate_current_field(self):
+        strategy = LLMMediatedIngestStrategy(
+            client=ScriptedClient([_extraction(), _extraction()]),
+            model="m",
+            mode=MODE_SEQUENTIAL,
+            chunker=FakeChunker(2),
+            embedder=FakeEmbedder(),
+        )
+
+        ops = strategy.plan([_event()], FakeView())
+
+        facts = [op for op in ops if op["kind"] == planmod.APPEND_FIELD_VALUE]
+        assert len(facts) == 2
+        assert facts[0]["supersede_current"] is False
+        assert facts[1]["supersede_current"] is True
+
     def test_markdown_fences_are_tolerated_but_nothing_else_is_repaired(self):
         """A model that cannot follow the output contract at all IS the
         capability-floor finding — repairing its output would hide the signal

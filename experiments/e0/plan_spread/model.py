@@ -59,7 +59,7 @@ class QuerySpec:
 
     @classmethod
     def from_mapping(cls, row: dict[str, Any]) -> "QuerySpec":
-        audit = row.get("path_audit") or {}
+        audit = row.get("path_audit") or row.get("audit") or {}
         return cls(
             query_id=str(row["query_id"]),
             dataset=str(row.get("dataset", "unknown")),

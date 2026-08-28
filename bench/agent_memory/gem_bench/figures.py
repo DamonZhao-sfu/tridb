@@ -446,6 +446,8 @@ def _figure9(
 
 def _scale_label(scale: Mapping[str, Any]) -> str:
     label = scale.get("operating_point")
+    if isinstance(label, Mapping) and label.get("key"):
+        return str(label["key"])
     if label:
         return str(label)
     points = list(scale.get("points") or [])

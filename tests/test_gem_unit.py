@@ -815,6 +815,8 @@ class TestIngestOperator:
 class TestRetrieveOperator:
     def _responses(self):
         return [
+            (r"register_edge_type", [(9,)]),
+            (r"to_regprocedure", [(True, True, True)]),
             (
                 r"SELECT id, title, state, salience FROM gem_unit",
                 [(1, "T1", "active", 0.0)],
@@ -900,7 +902,7 @@ class TestRetrieveOperator:
             (r"SELECT t FROM tjs_open", [(1,)]),
             (
                 r"tjs_open_candidates_examined",
-                [(120, 8, True, "budget", True, 3)],
+                [(120, 8, True, "budget", True, 3, 5, 120, 17)],
             ),
         ]
         operator, store = self._operator(responses)
@@ -910,7 +912,14 @@ class TestRetrieveOperator:
         assert result.probes["graph_censored"] is True
         assert result.probes["termination_reason"] == "budget"
         assert result.probes["budget_capped"] is True
+        assert result.probes["graph_reached"] == 5
+        assert result.probes["graph_reached_available"] is True
+        assert result.probes["relational_candidates_examined"] == 120
+        assert result.probes["relational_candidates_passed"] == 17
+        assert result.probes["relational_candidate_probes_available"] is True
+        assert result.probes["instrumentation_probe_read_ms"] >= 0
         assert result.probes["hnsw_iterative_scan"] == "relaxed_order"
+        assert result.probes["edge_type"] == store.edge_type_id(EdgeKind.ASSOCIATION)
 
     def test_as_of_selects_the_value_current_then_not_now(self):
         """C1: prior values appear only when q explicitly requests history."""
@@ -1027,7 +1036,9 @@ class TestRetrieveOperator:
         assert result.committed, result.aborted_reason
         # target-list (ProjectSet) position: a FROM-clause FunctionScan loses
         # early termination under LIMIT (TR-1)
-        assert store.conn.ran(r"SELECT \(e\).dst FROM \(SELECT")
+        statement = store.conn.sql_matching(r"gph_traverse_typed")[0]
+        assert "SELECT graph_store.gph_traverse_typed" in statement
+        assert "LIMIT %s" in statement
 
     def test_structural_route_requires_an_anchor(self):
         operator, _ = self._operator()

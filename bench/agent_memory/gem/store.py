@@ -48,6 +48,7 @@ from bench.agent_memory.gem.types import (
     StateDelta,
     UnitState,
 )
+from bench.agent_memory.table5_track_c.tracing import stage_span
 
 DEFAULT_DSN = "postgresql://postgres:tridb@localhost:5432/postgres"
 DEFAULT_DIM = 384
@@ -214,7 +215,13 @@ class Tx:
 
     def execute(self, sql: str, params: Sequence[Any] | None = None) -> Any:
         self.meter.db_statements += 1
-        return self.store.conn.execute(sql, params)
+        with stage_span(
+            "relational",
+            "tridb.postgresql.execute",
+            backend="postgresql",
+            attributes={"observable_call_kind": "database_client"},
+        ):
+            return self.store.conn.execute(sql, params)
 
     def lock_writer(self) -> None:
         """Serialise writers on the allocator; readers are unaffected.
@@ -683,6 +690,29 @@ class TriDBMemoryView:
             f"SELECT {self._UNIT_COLUMNS} FROM gem_unit WHERE id = %s", (int(unit_id),)
         ).fetchone()
         return None if row is None else self._unit_from_row(row, with_fields=True)
+
+    def unit_by_title(self, scope_id: str, title: str) -> SemanticUnit | None:
+        row = self._execute(
+            f"SELECT {self._UNIT_COLUMNS} FROM gem_unit"
+            " WHERE scope_id = %s AND title = %s",
+            (scope_id, title),
+        ).fetchone()
+        return None if row is None else self._unit_from_row(row, with_fields=False)
+
+    def latest_experience_before(
+        self, scope_id: str, ordinal: int
+    ) -> SemanticUnit | None:
+        """Newest eligible Experience in a scope, using the cutoff index."""
+        row = self._execute(
+            f"SELECT {self._UNIT_COLUMNS} FROM gem_unit"
+            " WHERE scope_id = %s AND state = 'active'"
+            " AND metadata->>'node_kind' = 'experience'"
+            " AND (metadata->>'experience_ordinal')::integer < %s"
+            " ORDER BY (metadata->>'experience_ordinal')::integer DESC, id DESC"
+            " LIMIT 1",
+            (scope_id, int(ordinal)),
+        ).fetchone()
+        return None if row is None else self._unit_from_row(row, with_fields=False)
 
     def find_similar(
         self, scope_id: str, embedding: Sequence[float], *, k: int = 10

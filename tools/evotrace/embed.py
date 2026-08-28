@@ -101,10 +101,34 @@ def task_text(row: Sequence[Any]) -> str:
 
 def node_text(row: Sequence[Any]) -> str:
     _, node_uid, language, status, changes, error, payload = row
+    return node_query_text(
+        language=language,
+        status=status,
+        changes=changes,
+        error=error,
+        payload=payload,
+    )
+
+
+def node_query_text(
+    *,
+    language: str | None,
+    status: str | None,
+    changes: str | None,
+    error: str | None,
+    payload: str | None,
+) -> str:
+    """Canonical node-artifact renderer shared by offline and live paths.
+
+    Keeping the generated-parent path here prevents a subtle second embedding space:
+    the online query must have byte-identical field labels and truncation to the
+    stored corpus embeddings.
+    """
+
     code = (payload or "")[:CODE_CHARS]
     parts = [
         f"Language: {language or 'unknown'}",
-        f"Outcome: {status}",
+        f"Outcome: {status or 'unknown'}",
     ]
     if changes:
         parts.append(f"Edit: {changes}")

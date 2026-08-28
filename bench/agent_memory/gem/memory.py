@@ -97,7 +97,9 @@ class TriDBGovernedMemory:
         )
 
     def init_schema(self) -> dict[str, Any]:
-        return self.store.init_schema()
+        receipt = self.store.init_schema()
+        self._retrieve.warm_tjs_probe_capabilities()
+        return receipt
 
     def close(self) -> None:
         self.store.close()

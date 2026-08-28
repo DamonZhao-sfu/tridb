@@ -19,9 +19,11 @@ Shape::
       -> if q.reinforce: the C6 write   (SAME transaction)
       -> log gem_transition -> COMMIT
 
-**TR-1.** ``tjs_open``'s ids are materialised FIRST and the operator closes
-before any UPDATE runs. Retrieval must honour Open/Next/Close and early
-termination; C6 must not turn it into a blocking operator.
+**TR-1.** ``tjs_open`` streams candidates and early-terminates inside the
+engine.  Only its bounded returned top-k ids are collected before the operator
+closes and any UPDATE runs; no full candidate or reach intermediate is
+materialised.  C6 must not turn this Open/Next/Close path into a blocking
+operator.
 """
 
 from __future__ import annotations
@@ -32,7 +34,6 @@ from typing import Any, Sequence
 from bench.agent_memory.gem.salience import ExponentialSalience
 from bench.agent_memory.gem.store import GemStore, Tx, vec_literal
 from bench.agent_memory.gem.types import (
-    EdgeKind,
     Hit,
     PhaseCost,
     Query,
@@ -42,6 +43,7 @@ from bench.agent_memory.gem.types import (
     StateDelta,
     UnitState,
 )
+from bench.agent_memory.table5_track_c.tracing import stage_span
 
 #: The fused vector-first path REQUIRES relaxed_order — the engine refuses
 #: strict_order outright. Fused and vector-only are therefore different
@@ -74,6 +76,22 @@ class RetrieveOperator:
         self.salience = salience or ExponentialSalience()
         self.table = table
         self.promotion_threshold = promotion_threshold
+        self._tjs_probe_capabilities: tuple[bool, bool, bool] | None = None
+
+    def warm_tjs_probe_capabilities(self) -> tuple[bool, bool, bool]:
+        """Discover the read-only probe surface outside measured retrievals."""
+        self._tjs_probe_capabilities = self._detect_tjs_probe_capabilities(
+            self.store.conn
+        )
+        return self._tjs_probe_capabilities
+
+    def _detect_tjs_probe_capabilities(self, executor: Any) -> tuple[bool, bool, bool]:
+        row = executor.execute(
+            "SELECT to_regprocedure('tjs_open_graph_reached()') IS NOT NULL,"
+            " to_regprocedure('tjs_open_relational_examined()') IS NOT NULL,"
+            " to_regprocedure('tjs_open_relational_passed()') IS NOT NULL"
+        ).fetchone()
+        return bool(row[0]), bool(row[1]), bool(row[2])
 
     # -- the operator ----------------------------------------------------
 
@@ -134,7 +152,13 @@ class RetrieveOperator:
             raise ValueError("query needs text or embedding for a vector leg")
         if self.embedder is None:
             raise RuntimeError("no embedder configured for query text")
-        encoded = self.embedder.encode([query.text])
+        with stage_span(
+            "embedding",
+            "tridb.query_embedding",
+            backend="qwen3_embedding_0.6b",
+            attributes={"observable_call_kind": "http_client"},
+        ):
+            encoded = self.embedder.encode([query.text])
         tx.meter.embed_calls += 1
         tx.meter.embed_sequences += 1
         return [float(value) for value in encoded[0]]
@@ -275,27 +299,40 @@ class RetrieveOperator:
         """
         if query.anchor_id is None:
             raise ValueError("GRAPH mode requires anchor_id")
-        type_id = 0
-        if query.extra_filter in (EdgeKind.EXTENSION.value, EdgeKind.ASSOCIATION.value):
-            type_id = self.store.edge_type_id(query.extra_filter)
+        type_id = (
+            0
+            if query.graph_edge_kind is None
+            else self.store.edge_type_id(query.graph_edge_kind)
+        )
+        predicate = self.predicate(query).as_string(self.store.conn)
         if query.hops <= 1:
             # Target-list (ProjectSet) position, per the AM's contract: a
             # FROM-clause FunctionScan loses early termination under LIMIT.
             rows = tx.execute(
-                "SELECT (e).dst FROM (SELECT graph_store.gph_traverse_typed("
-                "%s, %s, 0, -1) AS e) s",
-                (int(query.anchor_id), int(type_id)),
+                f"SELECT reached.dst FROM (SELECT (e).dst::bigint AS dst FROM ("
+                " SELECT graph_store.gph_traverse_typed(%s, %s, 0, -1) AS e"
+                f") traversed) reached JOIN {self.table} u ON u.id = reached.dst"
+                f" WHERE {predicate} LIMIT %s",
+                (int(query.anchor_id), int(type_id), int(query.k)),
             ).fetchall()
         else:
             rows = tx.execute(
-                "SELECT graph_store.gph_traverse_bfs(%s, %s, %s)",
-                (int(query.anchor_id), int(query.hops), int(type_id)),
+                f"SELECT reached.dst FROM (SELECT graph_store.gph_traverse_bfs("
+                f"%s, %s, %s)::bigint AS dst) reached JOIN {self.table} u"
+                f" ON u.id = reached.dst WHERE {predicate} LIMIT %s",
+                (
+                    int(query.anchor_id),
+                    int(query.hops),
+                    int(type_id),
+                    int(query.k),
+                ),
             ).fetchall()
-        ids = [int(row[0]) for row in rows if row[0] is not None][: query.k]
+        ids = [int(row[0]) for row in rows if row[0] is not None]
         return ids, {
             "route": query.route.value,
             "mode": "graph",
             "edge_type": type_id,
+            "filter": predicate,
             "hnsw_iterative_scan": None,
         }
 
@@ -311,28 +348,75 @@ class RetrieveOperator:
         if vector is None:
             raise ValueError("FUSED mode needs a query vector")
         predicate = self.predicate(query).as_string(self.store.conn)
-        tx.execute(f"SET hnsw.iterative_scan = {FUSED_ITERATIVE_SCAN}")
-        rows = tx.execute(
-            f"SELECT t FROM tjs_open('{self.table}', %s, %s, %s, %s, 'id', %s,"
-            " %s::vector, %s) AS t",
-            (
-                int(query.k),
-                int(query.term_cond),
-                int(query.m_seeds),
-                int(query.hops),
-                predicate,
-                vec_literal(vector),
-                None if anchor_id is None else int(anchor_id),
-            ),
-        ).fetchall()
-        ids = [int(row[0]) for row in rows]
-        # Probes describe the LAST call and must be read on THIS connection,
-        # before anything else runs on it. Censoring travels.
-        probe_row = tx.execute(
-            "SELECT tjs_open_candidates_examined(), tjs_open_graph_examined(),"
-            " tjs_open_graph_censored(), tjs_open_termination_reason(),"
-            " tjs_open_budget_capped(), tjs_open_bridges_injected()"
-        ).fetchone()
+        edge_type = (
+            0
+            if query.graph_edge_kind is None
+            else self.store.edge_type_id(query.graph_edge_kind)
+        )
+        if self._tjs_probe_capabilities is None:
+            self._tjs_probe_capabilities = self._detect_tjs_probe_capabilities(tx)
+        (
+            graph_reached_available,
+            relational_examined_available,
+            relational_passed_available,
+        ) = self._tjs_probe_capabilities
+        has_graph_reached_probe = graph_reached_available
+        has_relational_probes = (
+            relational_examined_available and relational_passed_available
+        )
+        with stage_span(
+            "fusion",
+            "tridb.tjs_open",
+            backend="postgresql_tjs_pg",
+            attributes={
+                "includes": ["vector", "graph", "relational"],
+                "iterator_contract": "Open/Next/Close",
+                "early_termination": True,
+                "attribution": "single_fused_operator",
+            },
+        ):
+            tx.execute(f"SET hnsw.iterative_scan = {FUSED_ITERATIVE_SCAN}")
+            rows = tx.execute(
+                f"SELECT t FROM tjs_open('{self.table}', %s, %s, %s, %s, 'id', %s,"
+                " %s::vector, %s, %s) AS t",
+                (
+                    int(query.k),
+                    int(query.term_cond),
+                    int(query.m_seeds),
+                    int(query.hops),
+                    predicate,
+                    vec_literal(vector),
+                    None if anchor_id is None else int(anchor_id),
+                    int(edge_type),
+                ),
+            ).fetchall()
+            ids = [int(row[0]) for row in rows]
+            # Probes describe the LAST call and must be read on THIS connection,
+            # before anything else runs on it. Censoring travels.
+            probe_sql = (
+                "SELECT tjs_open_candidates_examined(), tjs_open_graph_examined(),"
+                " tjs_open_graph_censored(), tjs_open_termination_reason(),"
+                " tjs_open_budget_capped(), tjs_open_bridges_injected()"
+            )
+            if has_graph_reached_probe:
+                probe_sql += ", tjs_open_graph_reached()"
+            if has_relational_probes:
+                probe_sql += (
+                    ", tjs_open_relational_examined(), tjs_open_relational_passed()"
+                )
+            probe_started = time.perf_counter()
+            probe_row = tx.execute(probe_sql).fetchone()
+            probe_read_ms = (time.perf_counter() - probe_started) * 1000
+        next_probe = 6
+        graph_reached = None
+        if has_graph_reached_probe:
+            graph_reached = probe_row[next_probe]
+            next_probe += 1
+        relational_examined = None
+        relational_passed = None
+        if has_relational_probes:
+            relational_examined = probe_row[next_probe]
+            relational_passed = probe_row[next_probe + 1]
         return ids, {
             "route": query.route.value,
             "mode": "fused",
@@ -342,9 +426,16 @@ class RetrieveOperator:
             "termination_reason": probe_row[3],
             "budget_capped": probe_row[4],
             "bridges_injected": probe_row[5],
+            "graph_reached": graph_reached,
+            "graph_reached_available": has_graph_reached_probe,
+            "relational_candidates_examined": relational_examined,
+            "relational_candidates_passed": relational_passed,
+            "relational_candidate_probes_available": has_relational_probes,
+            "instrumentation_probe_read_ms": probe_read_ms,
             "hnsw_iterative_scan": FUSED_ITERATIVE_SCAN,
             "filter": predicate,
             "anchor_id": anchor_id,
+            "edge_type": edge_type,
         }
 
     # -- materialisation -------------------------------------------------

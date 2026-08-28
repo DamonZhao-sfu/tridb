@@ -72,6 +72,11 @@ class Knobs:
     graph_work_budget: int = 65536
     graph_scoring: str = "ppr"
     iterative_scan: str = "relaxed_order"
+    #: Disable ANN index scans for the exact-oracle validation operating point.
+    ann_exact: bool = False
+    #: Cumulative prefixes used by AIVG.  They are execution policy, not answer
+    #: semantics; the logical seed cap remains QuerySpec.ann_m_seeds.
+    aivg_seed_prefixes: tuple[int, ...] = (1, 2, 4)
 
 
 @dataclass
@@ -92,6 +97,26 @@ class EngineResult:
     stage1_ms: float = 0.0
     stage2_ms: float = 0.0
     calls: int = 0
+    physical_plan: str | None = None
+    logical_spec_hash: str | None = None
+    timing_schema: str = "gem_plan_timing_v1"
+    embed_ms: float = 0.0
+    ann_ms: float = 0.0
+    graph_ms: float = 0.0
+    predicate_ms: float = 0.0
+    dedup_rank_ms: float = 0.0
+    hydrate_ms: float = 0.0
+    executor_overhead_ms: float = 0.0
+    retriever_total_ms: float = 0.0
+    ann_candidates: int = 0
+    ann_prefixes: list[int] = field(default_factory=list)
+    seeds_consumed: int = 0
+    predicate_probes: int = 0
+    predicate_passed: int = 0
+    reverse_membership_probes: int = 0
+    raw_reached: int = 0
+    distinct_reached: int = 0
+    dedup_hits: int = 0
 
 
 class W1Engine:
@@ -107,6 +132,7 @@ class W1Engine:
         self._vid: dict[str, int] = {}
         self._uid: dict[int, str] = {}
         self._vectors: dict[str, str] = {}
+        self._physical_ready: set[str] = set()
 
     # -- identity -------------------------------------------------------
 
@@ -234,9 +260,21 @@ class W1Engine:
 
     # -- the query --------------------------------------------------------
 
-    def run(self, spec: QuerySpec, knobs: Knobs) -> EngineResult:
+    def run(
+        self, spec: QuerySpec, knobs: Knobs, physical_plan: str | None = None
+    ) -> EngineResult:
+        if physical_plan is not None:
+            # Local import avoids a module cycle: the physical executor reuses this
+            # class's identity map and transaction settings but owns no logical code.
+            from bench.agent_memory.gem_eg.physical import PhysicalExecutor
+
+            return PhysicalExecutor(self).run(spec, knobs, physical_plan)
         result = EngineResult()
-        query_vec = self._vectors.get(spec.seed_uid)
+        query_vec = (
+            vec_literal(spec.query_vector)
+            if spec.query_vector is not None
+            else self._vectors.get(spec.seed_uid)
+        )
         if query_vec is None:
             # No seed vector means no query, not an empty answer. Distinguishing the
             # two matters: 6,536 prompts and 121 sessions legitimately have no vector.
@@ -409,6 +447,18 @@ class W1Engine:
                 "'" + t.replace("'", "''") + "'" for t in sorted(spec.predicate.exclude_tasks)
             )
             clauses.append(f"(task_uid IS NULL OR task_uid NOT IN ({joined}))")
+        if spec.predicate.include_tasks is not None:
+            joined = ", ".join(
+                "'" + t.replace("'", "''") + "'"
+                for t in sorted(spec.predicate.include_tasks)
+            )
+            clauses.append(f"task_uid IN ({joined})")
+        if spec.predicate.exclude_nodes:
+            joined = ", ".join(
+                "'" + uid.replace("'", "''") + "'"
+                for uid in sorted(spec.predicate.exclude_nodes)
+            )
+            clauses.append(f"uid NOT IN ({joined})")
         return " AND ".join(clauses)
 
 

@@ -242,6 +242,10 @@ class Query:
     m_seeds: int = 4
     term_cond: int = 32
     anchor_id: int | None = None
+    # Retrieval expands context over association edges.  ``None`` is the
+    # explicit diagnostic opt-in to ANY edge type; it must never be the
+    # benchmark default because extension edges carry propagation rights.
+    graph_edge_kind: EdgeKind | None = EdgeKind.ASSOCIATION
     extra_filter: str | None = None
 
 

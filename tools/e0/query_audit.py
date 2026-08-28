@@ -36,15 +36,22 @@ from typing import Any
 from tools.e0.common import environment_record, write_json
 
 
-def audit(queries_path: Path, raw_root: Path) -> dict[str, Any]:
+def audit(
+    queries_path: Path, raw_root: Path, *, dataset: str = "prime"
+) -> dict[str, Any]:
     try:
-        from stark_qa.skb.prime import PrimeSKB
+        if dataset == "prime":
+            from stark_qa.skb.prime import PrimeSKB as DatasetSKB
+        elif dataset == "mag":
+            from stark_qa.skb.mag import MagSKB as DatasetSKB
+        else:
+            raise ValueError(f"unsupported STARK query-audit dataset: {dataset}")
     except ImportError as exc:  # pragma: no cover - environment guard
         raise RuntimeError("stark-qa is required; install requirements-e0.txt") from exc
 
     from tools.e0.stark_prime_prepare import _typed_reachable
 
-    skb = PrimeSKB(root=str(raw_root), download_processed=False)
+    skb = DatasetSKB(root=str(raw_root), download_processed=False)
     rows = [
         json.loads(line)
         for line in queries_path.read_text(encoding="utf-8").splitlines()
@@ -63,7 +70,10 @@ def audit(queries_path: Path, raw_root: Path) -> dict[str, Any]:
             failures.append(
                 {"query_id": qid, "check": "unreachable_answers", "detail": missing}
             )
-        actual_name = str(skb.node_info[anchor].get("name", ""))
+        info = skb.node_info[anchor]
+        actual_name = str(
+            info.get("name", "") or info.get("title", "") or info.get("DisplayName", "")
+        )
         if actual_name != row["anchor_names"][0]:
             failures.append(
                 {
@@ -94,7 +104,9 @@ def audit(queries_path: Path, raw_root: Path) -> dict[str, Any]:
         "schema_version": "e0-query-audit-v0.1.0",
         "environment": environment_record(),
         "queries": str(queries_path),
-        "auditor": "stark_qa.skb.prime.PrimeSKB via stark_prime_prepare._typed_reachable",
+        "auditor": (
+            f"stark_qa {DatasetSKB.__name__} via stark_prime_prepare._typed_reachable"
+        ),
         "total": len(rows),
         "failures": failures,
         "passed": not failures,
@@ -126,9 +138,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--raw-root", type=Path, default=Path("data/e0/stark_prime/raw/prime")
     )
+    parser.add_argument("--dataset", choices=("prime", "mag"), default="prime")
     args = parser.parse_args(argv)
 
-    result = audit(args.queries, args.raw_root)
+    result = audit(args.queries, args.raw_root, dataset=args.dataset)
     print(
         f"[query_audit] {result['total']} queries re-audited with the official stark-qa API"
     )

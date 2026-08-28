@@ -34,6 +34,7 @@ class TriDBLiveDataset:
         self.name = name
         self.table = _identifier(str(cfg.get("table", "e0_node")))
         self.graph_budget = int(cfg.get("graph_work_budget", 50_000_000))
+        self.ann_effort = int(cfg.get("hnsw_ef_search", 100))
         self.pg = psycopg.connect(
             host=str(cfg["host"]),
             port=int(cfg["port"]),
@@ -46,7 +47,7 @@ class TriDBLiveDataset:
             cursor.execute("SET hnsw.iterative_scan = relaxed_order")
             cursor.execute(
                 "SELECT set_config('hnsw.ef_search', %s, false)",
-                (str(int(cfg.get("hnsw_ef_search", 100))),),
+                (str(self.ann_effort),),
             )
             cursor.execute("SET graph_store.assume_dense_open = on")
             cursor.execute(
@@ -76,6 +77,16 @@ class TriDBLiveDataset:
 
     def close(self) -> None:
         self.pg.close()
+
+    def set_ann_effort(self, effort: int) -> None:
+        if effort <= 0:
+            raise ValueError("ANN effort must be positive")
+        self.ann_effort = int(effort)
+        with self.pg.cursor() as cursor:
+            cursor.execute(
+                "SELECT set_config('hnsw.ef_search', %s, false)",
+                (str(self.ann_effort),),
+            )
 
     def load_queries(self, path: Path) -> list[QuerySpec]:
         return [
@@ -154,9 +165,20 @@ class TriDBLiveDataset:
     def execute(
         self, query: QuerySpec, plan: PlanSpec, *, top_n: int
     ) -> dict[str, Any]:
+        return self._execute_tjs(
+            query, plan, top_n=top_n, predicate=self._predicate_sql(query)
+        )
+
+    def _execute_tjs(
+        self,
+        query: QuerySpec,
+        plan: PlanSpec,
+        *,
+        top_n: int,
+        predicate: str,
+    ) -> dict[str, Any]:
         anchors = self._vids(query.anchor_ids)
         type_ids = [self.edge_type_ids[value] for value in query.edge_types]
-        predicate = self._predicate_sql(query)
         started = time.perf_counter_ns()
         with self.pg.cursor() as cursor:
             # Target-list SRF placement preserves the pull path used by the graph iterator.
@@ -220,12 +242,146 @@ class TriDBLiveDataset:
             # only final ids; the post-timing probe is instrumentation, not query execution.
             "round_trips": 0,
             "client_query_round_trips": 1,
+            "store_rpc_count": 0,
+            "cross_store_handoff_count": 0,
             "bytes_shipped": 0,
             "rows_shipped": 0,
+            "intermediate_rows_by_boundary": {},
+            "payload_bytes_by_boundary": {},
             "result_bytes": len(json.dumps(result_ids, default=str).encode()),
+            "serialization_ms": 0.0,
+            "serialization_ms_by_boundary": {},
             "serialization_fraction": 0.0,
+            "payload_measurement": "no_cross_store_intermediate_payload",
+            "ann_effort": self.ann_effort,
             "graph_censored": bool(censored),
             "termination": str(term),
+            "quality": quality_metrics(result_ids, query.answer_ids),
+            "result_ids": result_ids,
+        }
+
+    def execute_modality(
+        self,
+        query: QuerySpec,
+        plan: PlanSpec,
+        *,
+        top_n: int,
+        arm: str,
+    ) -> dict[str, Any]:
+        """Execute one TriDB-only modality arm without relational graph joins."""
+        allowed = {
+            "vector_only",
+            "graph_only",
+            "relational_only",
+            "vector_relational",
+            "vector_graph",
+            "vector_graph_relational",
+        }
+        if arm not in allowed:
+            raise ValueError(f"unknown modality arm {arm!r}")
+        if arm == "vector_graph_relational":
+            result = self.execute(query, plan, top_n=top_n)
+            return {**result, "modality_arm": arm}
+        if arm == "vector_graph":
+            result = self._execute_tjs(query, plan, top_n=top_n, predicate="TRUE")
+            return {**result, "modality_arm": arm}
+
+        anchors = self._vids(query.anchor_ids)
+        type_ids = [self.edge_type_ids[value] for value in query.edge_types]
+        predicate = self._predicate_sql(query)
+        vector = self._vector_literal(query)
+        graph_before = 0
+        graph_after = 0
+        graph_censored = False
+        started = time.perf_counter_ns()
+        with self.pg.cursor() as cursor:
+            if arm == "vector_only":
+                cursor.execute(
+                    f"SELECT id FROM {self.table} "
+                    "ORDER BY embedding <=> %s::vector LIMIT %s",
+                    (vector, top_n),
+                )
+            elif arm == "graph_only":
+                cursor.execute("SELECT graph_store.gph_visits()")
+                graph_before = int(cursor.fetchone()[0])
+                # Target-list SRF + LIMIT preserves pull-based early termination.
+                cursor.execute(
+                    "SELECT graph_store.gph_traverse_bounded_multi("
+                    "%s::bigint[],%s,%s::integer[],%s,%s) LIMIT %s",
+                    (
+                        anchors,
+                        plan.hops,
+                        type_ids,
+                        query.require_each_anchor,
+                        self.graph_budget,
+                        top_n,
+                    ),
+                )
+            elif arm == "relational_only":
+                cursor.execute(
+                    f"SELECT id FROM {self.table} WHERE {predicate} "
+                    "ORDER BY id LIMIT %s",
+                    (top_n,),
+                )
+            else:  # vector_relational
+                cursor.execute(
+                    f"SELECT id FROM {self.table} WHERE {predicate} "
+                    "ORDER BY embedding <=> %s::vector LIMIT %s",
+                    (vector, top_n),
+                )
+            result_vids = [int(row[0]) for row in cursor]
+        latency_ms = _ms(started)
+        if arm == "graph_only":
+            with self.pg.cursor() as cursor:
+                cursor.execute(
+                    "SELECT graph_store.gph_visits(), "
+                    "graph_store.gph_traverse_bounded_censored()"
+                )
+                graph_after, graph_censored = cursor.fetchone()
+
+        result_ids = [self.vid_to_external[vid] for vid in result_vids]
+        graph_edges = max(0, int(graph_after) - graph_before)
+        stage = {
+            "ann_ms": latency_ms if arm == "vector_only" else 0.0,
+            "traverse_ms": latency_ms if arm == "graph_only" else 0.0,
+            "filter_ms": latency_ms if arm == "relational_only" else 0.0,
+            "ann_filter_ms": latency_ms if arm == "vector_relational" else 0.0,
+            "merge_ms": 0.0,
+        }
+        return {
+            "status": "ok",
+            "backend": self.backend_name,
+            "modality_arm": arm,
+            "valid_for_system_latency_claims": True,
+            "latency_ms": latency_ms,
+            "stage_latency_ms": stage,
+            "intermediate_cardinality": {
+                "seeds": len(result_vids)
+                if arm in {"vector_only", "vector_relational"}
+                else None,
+                "reached": len(result_vids) if arm == "graph_only" else None,
+                "predicate_matches": self._predicate_count_cache[query.query_id]
+                if arm in {"relational_only", "vector_relational"}
+                else None,
+                "candidates": len(result_vids),
+                "graph_edges_examined": graph_edges,
+            },
+            "round_trips": 0,
+            "client_query_round_trips": 1,
+            "store_rpc_count": 0,
+            "cross_store_handoff_count": 0,
+            "intermediate_rows_by_boundary": {},
+            "payload_bytes_by_boundary": {},
+            "serialization_ms": 0.0,
+            "serialization_ms_by_boundary": {},
+            "payload_measurement": "no_cross_store_intermediate_payload",
+            "ann_effort": self.ann_effort,
+            "graph_censored": bool(graph_censored),
+            "termination": "graph_budget"
+            if graph_censored
+            else (
+                "limit_or_graph_exhausted" if arm == "graph_only" else "not_applicable"
+            ),
             "quality": quality_metrics(result_ids, query.answer_ids),
             "result_ids": result_ids,
         }

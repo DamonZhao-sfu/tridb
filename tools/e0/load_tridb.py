@@ -89,7 +89,11 @@ def _vec_literal(values: list[float]) -> str:
 def _dataset_rows(spec: dict[str, Any]) -> tuple[list[Any], dict[Any, dict[str, Any]]]:
     import pyarrow.parquet as pq
 
-    table = pq.read_table(Path(spec["nodes"]))
+    node_file = pq.ParquetFile(Path(spec["nodes"]))
+    available = set(node_file.schema_arrow.names)
+    required = ["node_id", "entity_type"]
+    optional = [name for name in ("generation",) if name in available]
+    table = node_file.read(columns=[*required, *optional])
     rows = table.to_pylist()
     ids = [row["node_id"] for row in rows]
     if len(ids) != len(set(ids)):
@@ -118,11 +122,12 @@ def _load_relational(
     ids: list[Any],
     node_by_id: dict[Any, dict[str, Any]],
     parent_by_vid: dict[int, int],
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     import pyarrow.parquet as pq
 
     id_to_vid = {value: idx for idx, value in enumerate(ids)}
     embeddings = pq.ParquetFile(Path(spec["embeddings"]))
+    merge_sparse = bool(spec.get("sparse_embeddings_sorted_by_node_id", False))
     dimension: int | None = None
     copied = 0
     with connection.cursor() as cursor:
@@ -132,44 +137,103 @@ def _load_relational(
             "CREATE TABLE e0_node ("
             "id bigint PRIMARY KEY, external_id text NOT NULL UNIQUE, "
             "entity_type text NOT NULL, generation integer, parent_vid bigint, "
-            f"embedding vector({dimension}) NOT NULL)"
+            f"embedding vector({dimension}))"
         )
         with cursor.copy(
             "COPY e0_node (id,external_id,entity_type,generation,parent_vid,embedding) "
             "FROM STDIN"
         ) as copy:
-            for batch in embeddings.iter_batches(
-                batch_size=512, columns=["node_id", "embedding"]
-            ):
-                for external_id, vector in zip(
-                    batch.column(0).to_pylist(), batch.column(1).to_pylist()
-                ):
-                    if external_id not in id_to_vid:
-                        raise ValueError(f"embedding has unknown id {external_id!r}")
-                    vid = id_to_vid[external_id]
-                    node = node_by_id[external_id]
-                    copy.write_row(
-                        (
-                            vid,
-                            str(external_id),
-                            str(node["entity_type"]),
-                            node.get("generation"),
-                            parent_by_vid.get(vid),
-                            _vec_literal(vector),
-                        )
+            embedding_rows = (
+                (
+                    (external_id, vector)
+                    for batch in embeddings.iter_batches(
+                        batch_size=512, columns=["node_id", "embedding"]
                     )
-                    copied += 1
-        if copied != len(ids):
-            raise ValueError(f"embedding rows {copied} != nodes {len(ids)}")
+                    for external_id, vector in zip(
+                        batch.column(0).to_pylist(), batch.column(1).to_pylist()
+                    )
+                )
+                if merge_sparse
+                else iter(())
+            )
+            current_embedding = next(embedding_rows, None)
+            for external_id in ids:
+                vid = id_to_vid[external_id]
+                node = node_by_id[external_id]
+                vector = None
+                if current_embedding is not None:
+                    vector_id, vector_value = current_embedding
+                    if vector_id == external_id:
+                        vector = _vec_literal(vector_value)
+                        copied += 1
+                        current_embedding = next(embedding_rows, None)
+                    elif vector_id < external_id:
+                        raise ValueError(
+                            f"embedding IDs are not aligned with nodes: {vector_id!r}"
+                        )
+                copy.write_row(
+                    (
+                        vid,
+                        str(external_id),
+                        str(node["entity_type"]),
+                        node.get("generation"),
+                        parent_by_vid.get(vid),
+                        vector,
+                    )
+                )
+            if current_embedding is not None:
+                raise ValueError(
+                    f"embedding has unknown trailing id {current_embedding[0]!r}"
+                )
+        if not merge_sparse:
+            cursor.execute(
+                f"CREATE TEMP TABLE e0_embedding_stage "
+                f"(id bigint PRIMARY KEY, embedding vector({dimension}) NOT NULL)"
+            )
+            with cursor.copy(
+                "COPY e0_embedding_stage (id,embedding) FROM STDIN"
+            ) as copy:
+                for batch in embeddings.iter_batches(
+                    batch_size=512, columns=["node_id", "embedding"]
+                ):
+                    for external_id, vector in zip(
+                        batch.column(0).to_pylist(), batch.column(1).to_pylist()
+                    ):
+                        if external_id not in id_to_vid:
+                            raise ValueError(
+                                f"embedding has unknown id {external_id!r}"
+                            )
+                        vid = id_to_vid[external_id]
+                        copy.write_row(
+                            (
+                                vid,
+                                _vec_literal(vector),
+                            )
+                        )
+                        copied += 1
+        expected = embeddings.metadata.num_rows
+        if copied != expected:
+            raise ValueError(f"embedding rows {copied} != parquet rows {expected}")
+        if not merge_sparse:
+            cursor.execute(
+                "UPDATE e0_node AS node SET embedding = stage.embedding "
+                "FROM e0_embedding_stage AS stage WHERE node.id = stage.id"
+            )
+            cursor.execute("DROP TABLE e0_embedding_stage")
         cursor.execute("CREATE INDEX e0_node_entity_type ON e0_node(entity_type)")
         cursor.execute("CREATE INDEX e0_node_generation ON e0_node(generation)")
         cursor.execute("CREATE INDEX e0_node_parent ON e0_node(parent_vid)")
+        maintenance_work_mem = str(spec.get("maintenance_work_mem", "1GB"))
+        cursor.execute(
+            "SELECT set_config('maintenance_work_mem', %s, true)",
+            (maintenance_work_mem,),
+        )
         cursor.execute(
             "CREATE INDEX e0_node_embedding_hnsw ON e0_node USING hnsw "
             "(embedding vector_cosine_ops) WITH (m=16, ef_construction=200)"
         )
         cursor.execute("ANALYZE e0_node")
-    return copied, int(dimension)
+    return len(ids), copied, int(dimension)
 
 
 def _load_graph(
@@ -244,7 +308,10 @@ def _verify(
     expected_edges: int,
     type_ids: dict[str, int],
 ) -> dict[str, Any]:
+    import pyarrow.parquet as pq
+
     id_to_vid = {value: idx for idx, value in enumerate(ids)}
+    expected_vectors = pq.ParquetFile(Path(spec["embeddings"])).metadata.num_rows
     with connection.cursor() as cursor:
         cursor.execute(
             "SELECT count(*),count(embedding),graph_store.gph_vertex_count(),"
@@ -288,7 +355,7 @@ def _verify(
                 )
     checks = {
         "relational_rows_match": rows == len(ids),
-        "vectors_complete": vectors == len(ids),
+        "candidate_vectors_complete": vectors == expected_vectors,
         "native_vertices_match": vertices == len(ids),
         "native_raw_edges_match": raw_edges == expected_edges,
         "native_visible_edges_match": visible_edges == expected_edges,
@@ -296,7 +363,11 @@ def _verify(
         "verification_uncensored": not censored_queries,
     }
     return {
-        "expected": {"nodes": len(ids), "directed_edges": expected_edges},
+        "expected": {
+            "nodes": len(ids),
+            "vectors": expected_vectors,
+            "directed_edges": expected_edges,
+        },
         "observed": {
             "relational_rows": rows,
             "vectors": vectors,
@@ -325,7 +396,7 @@ def load_dataset(name: str, spec: dict[str, Any], *, reset: bool) -> dict[str, A
     with psycopg.connect(**_conn_args(cfg, str(cfg["dbname"]))) as connection:
         _install_schema(connection)
         relational_started = time.time()
-        rows, dimension = _load_relational(
+        rows, vectors, dimension = _load_relational(
             connection, spec, ids, node_by_id, parent_by_vid
         )
         connection.commit()
@@ -339,6 +410,7 @@ def load_dataset(name: str, spec: dict[str, Any], *, reset: bool) -> dict[str, A
     return {
         "database": str(cfg["dbname"]),
         "rows": rows,
+        "vectors": vectors,
         "dimension": dimension,
         "directed_edges": edges,
         "edge_types": type_ids,
@@ -355,20 +427,37 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--config", type=Path, default=Path("configs/e0/plan_space_v0.3.yaml")
     )
-    parser.add_argument(
-        "--dataset", action="append", choices=["stark_prime", "openevolve"]
-    )
+    parser.add_argument("--staged-config", type=Path)
+    parser.add_argument("--dataset", action="append")
     parser.add_argument("--reset", action="store_true")
     parser.add_argument(
         "--out", type=Path, default=Path("data/e0/tridb_load_v0.3.json")
     )
     args = parser.parse_args(argv)
-    config = load_config(args.config)
-    selected = args.dataset or list(config["datasets"])
+    if args.staged_config is not None:
+        from experiments.e1.composition.config import load_config as load_e1_config
+        from experiments.e1.composition.staging import (
+            load_staged_config,
+            staged_dataset,
+        )
+
+        staged = load_staged_config(args.staged_config)
+        base = load_e1_config(Path(staged["base_config"]))
+        dataset_name = staged_dataset(staged, base)
+        config = {"datasets": {dataset_name: base["datasets"][dataset_name]}}
+        selected = args.dataset or [dataset_name]
+        config_artifact = args.staged_config
+    else:
+        config = load_config(args.config)
+        selected = args.dataset or list(config["datasets"])
+        config_artifact = args.config
+    unknown = sorted(set(selected) - set(config["datasets"]))
+    if unknown:
+        raise ValueError(f"datasets are not present in the selected config: {unknown}")
     report: dict[str, Any] = {
         "schema_version": "e0-tridb-load-v0.3.0",
         "environment": environment_record(),
-        "config": artifact_record(args.config),
+        "config": artifact_record(config_artifact),
         "build": {
             "graph_store_am": artifact_record(GRAPH_SO),
             "tjs_pg": artifact_record(TJS_SO),

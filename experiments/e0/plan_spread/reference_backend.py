@@ -47,14 +47,15 @@ class ReferenceDataset:
         embedding_table = pq.read_table(
             Path(spec["embeddings"]), columns=["node_id", "embedding"]
         )
-        vector_by_id = dict(
-            zip(
-                embedding_table["node_id"].to_pylist(),
-                embedding_table["embedding"].to_pylist(),
-            )
+        vector_ids = embedding_table["node_id"].to_pylist()
+        unknown = [node_id for node_id in vector_ids if node_id not in self.id_to_idx]
+        if unknown:
+            raise ValueError(f"{name}: embeddings contain unknown IDs: {unknown[:5]}")
+        self.vector_node_indices = np.fromiter(
+            (self.id_to_idx[node_id] for node_id in vector_ids), dtype=np.int64
         )
         self.vectors = np.asarray(
-            [vector_by_id[node_id] for node_id in self.node_ids], dtype=np.float32
+            embedding_table["embedding"].to_pylist(), dtype=np.float32
         )
         norms = np.linalg.norm(self.vectors, axis=1, keepdims=True)
         norms[norms == 0] = 1.0
@@ -139,8 +140,9 @@ class ReferenceDataset:
     def _similarity_order(self, query: QuerySpec) -> np.ndarray:
         if query.query_id not in self._order_cache:
             scores = self.vectors @ self.query_vectors[query.query_id]
-            order = np.argsort(-scores, kind="stable")
-            rank = np.empty(len(order), dtype=np.int64)
+            local_order = np.argsort(-scores, kind="stable")
+            order = self.vector_node_indices[local_order]
+            rank = np.full(len(self.node_ids), len(self.node_ids), dtype=np.int64)
             rank[order] = np.arange(len(order), dtype=np.int64)
             self._order_cache[query.query_id] = order
             self._rank_cache[query.query_id] = rank
@@ -223,6 +225,15 @@ class ReferenceDataset:
                 mask &= sibling_mask
         self._predicate_cache[query.query_id] = mask
         return mask
+
+    def valid_result_ids(self, query: QuerySpec, hops: int) -> set[Any]:
+        """Return every ID satisfying the graph and relational constraints."""
+        predicate = self._predicate_mask(query)
+        return {
+            self.node_ids[index]
+            for index in self._reachable(query, hops)
+            if predicate[index]
+        }
 
     def execute(
         self, query: QuerySpec, plan: PlanSpec, *, top_n: int

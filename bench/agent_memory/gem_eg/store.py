@@ -54,6 +54,10 @@ EG_EDGE_TYPES: tuple[str, ...] = (
     # derived_inverse=true and excluded from logical edge counts.
     "eg_child_of",      # child   -> parent
     "eg_hier_inv",      # node    -> session -> task
+    # Cross-modal path statistic for the optimizer experiment.  For each node seed,
+    # one-hop adjacency contains its depth-3 lineage reach ordered by
+    # (fitness DESC, uid).  It is a native graph synopsis, never a relational join.
+    "eg_lineage_h3_fit_v1",
 )
 
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")

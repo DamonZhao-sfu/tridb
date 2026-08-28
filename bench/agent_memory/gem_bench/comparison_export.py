@@ -30,6 +30,8 @@ FIGURE_STEMS = (
 
 def _scale_label(scale: Mapping[str, Any]) -> str:
     label = scale.get("operating_point")
+    if isinstance(label, Mapping) and label.get("key"):
+        return str(label["key"])
     if label:
         return str(label)
     points = list(scale.get("points") or [])
@@ -70,11 +72,17 @@ def _readme(
     sections: Mapping[str, Any],
     points: Sequence[str],
     scale_labels: Sequence[str],
+    combined_runs: bool = False,
+    checkpoint_present: bool = False,
 ) -> str:
     point_args = " ".join(points)
     scale_args = " ".join(
-        f"results/agent_memory_comparison/raw/{label}_scale_results.json"
-        for label in scale_labels
+        f"<bundle-dir>/raw/{label}_scale_results.json" for label in scale_labels
+    )
+    checkpoint_line = (
+        "- `CHECKPOINT.md`: stopped-run status and the safe continuation command.\n"
+        if checkpoint_present
+        else ""
     )
     return f"""# TriDB/GEM multi-system-proxy comparison
 
@@ -86,7 +94,9 @@ def _readme(
 - Bundle schema: `{SCHEMA_VERSION}`
 - Generated: `{datetime.now(UTC).isoformat()}`
 
-This bundle compares TriDB/GEM operating points under one serial benchmark run.
+This bundle compares TriDB/GEM operating points from compatible serial benchmark
+{"runs" if combined_runs else "run"}. When a stopped experiment is combined from multiple run roots,
+`raw/run_manifest.json` records each source summary path and SHA-256.
 `II_embedrag` is a TriDB implementation. `IIIa_graphrag_like` and
 `IIIb_mem0_like` are taxonomy/cost-shape proxies, **not** the official GraphRAG
 or Mem0 systems. `gem_conformant` is the GEM contribution point.
@@ -95,7 +105,7 @@ or Mem0 systems. `gem_conformant` is the GEM contribution point.
 
 {_headline_table(sections, points)}
 
-Figure 2/3/10/11 contain all four operating points. Figure 9 contains only
+Figure 2/3/10/11 contain all selected core operating points. Figure 9 contains only
 `{"` and `".join(scale_labels)}` because the current scaling runner supports
 deterministic construction points only. Shared-database Figure 9 rows have
 `physical_isolated=false`; their footprint is logical, not isolated physical
@@ -108,14 +118,14 @@ storage.
 - `raw/paper_sections.json`: canonical core aggregates.
 - `raw/<point>/summary.json`: per-point detailed aggregates.
 - `raw/*_scale_results.json`: all Figure 9 repetitions and probes.
-- `MANIFEST.json`: SHA-256 and byte size for every artifact.
+{checkpoint_line}- `MANIFEST.json`: SHA-256 and byte size for every artifact.
 
 ## Re-render from this tracked bundle
 
 ```bash
 .venv/bin/python -m bench.agent_memory.gem_bench.figures \\
-  --input-dir results/agent_memory_comparison/raw \\
-  --output-dir results/agent_memory_comparison/figures \\
+  --input-dir <bundle-dir>/raw \\
+  --output-dir <bundle-dir>/figures \\
   --points {point_args} \\
   --scale-comparison-results {scale_args}
 ```
@@ -149,6 +159,8 @@ def export_comparison_bundle(
 ) -> dict[str, Any]:
     sections_path = core_dir / "paper_sections.json"
     sections = _load(sections_path)
+    run_manifest_path = core_dir / "run_manifest.json"
+    run_manifest = _load(run_manifest_path)
     scales = [_load(path) for path in scale_results]
     scale_labels = [_scale_label(scale) for scale in scales]
 
@@ -159,7 +171,7 @@ def export_comparison_bundle(
                 output_dir / "figures" / f"{stem}.{suffix}",
             )
     _copy(sections_path, output_dir / "raw" / "paper_sections.json")
-    _copy(core_dir / "run_manifest.json", output_dir / "raw" / "run_manifest.json")
+    _copy(run_manifest_path, output_dir / "raw" / "run_manifest.json")
     if (figures_dir / "plot_manifest.json").exists():
         _copy(
             figures_dir / "plot_manifest.json",
@@ -182,7 +194,13 @@ def export_comparison_bundle(
         writer.writeheader()
         writer.writerows(metrics)
     (output_dir / "README.md").write_text(
-        _readme(sections=sections, points=points, scale_labels=scale_labels),
+        _readme(
+            sections=sections,
+            points=points,
+            scale_labels=scale_labels,
+            combined_runs=bool(run_manifest.get("combined_from_multiple_serial_runs")),
+            checkpoint_present=(output_dir / "CHECKPOINT.md").exists(),
+        ),
         encoding="utf-8",
     )
 

@@ -144,14 +144,39 @@ class GemMemoryDatabase(ProgramDatabase):
         task_uid: str,
         max_injected: int | None = None,
         policy: str = "fixed",
+        frequency: float = 1.0,
+        gate_closed: str = "empty",
+        frequency_seed: int = 42,
+        render_mode: str = "code",
         **kwargs: Any,
     ) -> None:
         super().__init__(config, **kwargs)
         if policy not in {"fixed", "match_baseline"}:
             raise ValueError(f"unknown injection policy: {policy}")
+        if not 0.0 <= frequency <= 1.0:
+            raise ValueError(f"injection frequency must be in [0,1]: {frequency}")
+        if render_mode not in {"code", "changes"}:
+            raise ValueError(f"unknown render mode: {render_mode}")
         self._retriever = retriever
         self._task_uid = task_uid
         self._policy = policy
+        #: arXiv:2606.29823's `p` -- the PER-STEP PROBABILITY that memory is injected
+        #: at all, distinct from how many programs one injection carries. Its Figure 4
+        #: sweeps p in {no memory, 0.1, 0.5} and reads out the share of compute spent
+        #: on buggy nodes. A closed gate falls back to stock behaviour for that
+        #: iteration, which is what "no injection this step" has to mean.
+        self._frequency = frequency
+        self._gate_closed = gate_closed
+        self._render_mode = render_mode
+        #: The most recent gate draw, read by the snapshot hook in run_arm.py.
+        #: `sample_from_island` and `_create_database_snapshot` are called back to
+        #: back for the same iteration (process_parallel.py:865,872), so a single
+        #: slot is enough -- there is no interleaving between the two.
+        self.last_gate_open = True
+        #: Its own RNG. Drawing from the global `random` would make the gate depend on
+        #: how many times OpenEvolve's sampler happened to call it, so two arms with
+        #: the same seed would not see the same gate sequence.
+        self._gate = random.Random(frequency_seed)
         #: How many of the requested inspirations to replace. None = all of them.
         self._max_injected = max_injected
         self._external_ids: set[str] = set()
@@ -177,12 +202,22 @@ class GemMemoryDatabase(ProgramDatabase):
         # `wanted` bounds the RETRIEVAL, not the returned count: asking the memory
         # system for more than the prompt can hold is wasted work.
         wanted = len(own) if num_inspirations is None else num_inspirations
-        budget = wanted if self._max_injected is None else min(wanted, self._max_injected)
+        budget = (
+            wanted if self._max_injected is None else min(wanted, self._max_injected)
+        )
         self._iteration += 1
 
         retrieved: list[RetrievedProgram] = []
         error: str | None = None
-        if budget > 0:
+        # arXiv:2606.29823 Figure 4's p. A closed gate means this iteration gets NO
+        # memory. What "no memory" means to the rest of the prompt is decided by the
+        # snapshot hook, not here: `sample_from_island` only supplies `inspirations`,
+        # while the prompt's `previous_programs` and `top_programs` sections are cut
+        # from the island list in the worker (process_parallel.py:154-169) and are
+        # invisible from this method.
+        gate_open = self._gate.random() < self._frequency
+        self.last_gate_open = gate_open
+        if budget > 0 and gate_open:
             try:
                 retrieved = self._retriever.retrieve(
                     task_uid=self._task_uid,
@@ -195,7 +230,9 @@ class GemMemoryDatabase(ProgramDatabase):
                 # retrieval outage that silently degrades arm B into arm A is the
                 # failure mode that makes a whole comparison meaningless.
                 error = f"{type(exc).__name__}: {exc}"
-                logger.error("retrieval failed at iteration %d: %s", self._iteration, error)
+                logger.error(
+                    "retrieval failed at iteration %d: %s", self._iteration, error
+                )
                 raise
 
         injected = [self._register(item) for item in retrieved]
@@ -216,12 +253,21 @@ class GemMemoryDatabase(ProgramDatabase):
         #   does not have), which is also how AlphaEvolve's own "No context in the
         #   prompt" ablation is framed; it is reported per-iteration rather than
         #   assumed away.
-        if self._policy == "match_baseline":
+        # A closed gate under `empty` means the iteration is a `nocontext` iteration:
+        # no memory AND no own references. The island lists are emptied by the
+        # snapshot hook in run_arm.py, which kills the prompt's `previous_programs`
+        # and `top_programs`; `inspirations` travel as an ID list resolved from
+        # `programs`, not `islands`, so the hook cannot see them and they must be
+        # dropped here. Measured on an 8-iteration live run: without this, iteration
+        # 6 closed its gate and still rendered one own program.
+        if not gate_open and self._gate_closed == "empty":
+            merged: list[Any] = []
+        elif self._policy == "match_baseline":
             n_replace = min(len(injected), len(own))
             merged = injected[:n_replace] + own[n_replace:]
         elif self._policy == "fixed":
             keep = max(0, len(own) - len(injected))
-            merged = injected + own[len(own) - keep:] if keep else injected + []
+            merged = injected + own[len(own) - keep :] if keep else injected + []
         else:  # pragma: no cover - guarded at construction
             raise ValueError(f"unknown injection policy: {self._policy}")
         rendered_external = [p.id for p in merged if is_external(p.id)]
@@ -235,6 +281,8 @@ class GemMemoryDatabase(ProgramDatabase):
                 "rendered": len(merged),
                 "budget": budget,
                 "policy": self._policy,
+                "frequency": self._frequency,
+                "gate_open": gate_open,
                 "retrieved": len(retrieved),
                 # What actually reached the prompt, NOT what was retrieved. Recording
                 # the retrieved count here reported "injected=5, rendered=0" for three
@@ -284,7 +332,9 @@ class GemMemoryDatabase(ProgramDatabase):
         stable; the real uid travels in `metadata["uid"]` and in the injection trace,
         so nothing is lost.
         """
-        digest = hashlib.sha1(uid.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        digest = hashlib.sha1(uid.encode("utf-8"), usedforsecurity=False).hexdigest()[
+            :16
+        ]
         return f"{EXTERNAL_PREFIX}{digest}"
 
     def _register(self, item: RetrievedProgram) -> Program:
@@ -295,8 +345,12 @@ class GemMemoryDatabase(ProgramDatabase):
             return existing
         program = Program(
             id=pid,
-            code=item.code,
-            language=item.language,
+            code=(
+                item.changes_description or "<missing changes_description>"
+                if self._render_mode == "changes"
+                else item.code
+            ),
+            language="text" if self._render_mode == "changes" else item.language,
             changes_description=item.changes_description,
             metrics=dict(item.metrics),
             # generation/iteration_found stay at 0 and parent_id at None: these belong
@@ -305,6 +359,10 @@ class GemMemoryDatabase(ProgramDatabase):
                 EXTERNAL_FLAG: True,
                 "uid": item.uid,
                 "provenance": item.provenance,
+                "render_mode": self._render_mode,
+                "source_code_sha256": hashlib.sha256(
+                    item.code.encode("utf-8")
+                ).hexdigest(),
             },
         )
         # `self.programs` only. Deliberately NOT: self.islands, self.archive,

@@ -38,6 +38,9 @@ well-defined gate.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import math
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -45,7 +48,12 @@ import numpy as np
 
 from bench.agent_memory.gem_eg.corpus import Corpus
 
-RankBy = Literal["similarity", "reward"]
+RankBy = Literal["similarity", "reward", "seed_fitness"]
+
+# Float32 vectors and pgvector can differ by a few 1e-8 on mathematically identical
+# cosine distances.  The nearest distinct corpus distances are ~1e-3, so 1e-6
+# separates representation noise from signal (same calibration as metrics.TIE_EPS).
+SEED_DISTANCE_TIE_EPS = 1e-6
 
 #: The four query SHAPES. An ablation removes a leg of the fused query, which changes
 #: the shape — it is not a parameter setting. Encoding it as `hops=0` (the first
@@ -87,6 +95,10 @@ class Predicate:
     kind: str | None = "node"
     require_valid: bool | None = None
     min_fitness: float | None = None
+    #: Strict lower bound used by the physical-plan experiment.  This is separate
+    #: from ``min_fitness`` because changing the long-standing >= contract would
+    #: silently change every existing W1 replay.
+    fitness_gt: float | None = None
     max_fitness: float | None = None
     exclude_sessions: frozenset[str] = frozenset()
     exclude_tasks: frozenset[str] = frozenset()
@@ -97,6 +109,7 @@ class Predicate:
     #: one, 38 had a non-finite one). Admitting them into a reward-ranked answer would
     #: mean inventing an order, so they are excluded whenever a reward bound applies.
     require_fitness: bool = False
+    require_finite_fitness: bool = False
 
     def accepts(self, node: dict[str, Any]) -> bool:
         if self.kind is not None and node.get("_kind", "node") != self.kind:
@@ -115,11 +128,19 @@ class Predicate:
             return False
         fitness = node.get("fitness")
         needs_fitness = (
-            self.require_fitness or self.min_fitness is not None or self.max_fitness is not None
+            self.require_fitness
+            or self.require_finite_fitness
+            or self.min_fitness is not None
+            or self.fitness_gt is not None
+            or self.max_fitness is not None
         )
         if needs_fitness and fitness is None:
             return False
+        if self.require_finite_fitness and not math.isfinite(float(fitness)):
+            return False
         if self.min_fitness is not None and fitness < self.min_fitness:
+            return False
+        if self.fitness_gt is not None and fitness <= self.fitness_gt:
             return False
         if self.max_fitness is not None and fitness > self.max_fitness:
             return False
@@ -141,10 +162,23 @@ class Predicate:
             clauses.append("NOT is_valid")
         if self.min_fitness is not None:
             clauses.append(f"fitness >= {self.min_fitness!r}")
+        if self.fitness_gt is not None:
+            clauses.append(f"fitness > {self.fitness_gt!r}")
         if self.max_fitness is not None:
             clauses.append(f"fitness <= {self.max_fitness!r}")
-        if self.require_fitness or self.min_fitness is not None or self.max_fitness is not None:
+        if (
+            self.require_fitness
+            or self.require_finite_fitness
+            or self.min_fitness is not None
+            or self.fitness_gt is not None
+            or self.max_fitness is not None
+        ):
             clauses.append("fitness IS NOT NULL")
+        if self.require_finite_fitness:
+            clauses.append(
+                "fitness > '-Infinity'::double precision AND "
+                "fitness < 'Infinity'::double precision"
+            )
         if self.exclude_sessions:
             clauses.append(f"session_uid NOT IN ({_lits(self.exclude_sessions)})")
         if self.exclude_tasks:
@@ -177,11 +211,56 @@ class QuerySpec:
     k: int = 10
     mode: Mode = "ann_then_traverse"
     rank_by: RankBy = "similarity"
+    #: A live parent program is not a stored vertex.  Its canonical node-artifact
+    #: embedding therefore travels with the logical query.  A tuple keeps the frozen
+    #: dataclass deterministic and JSON/hash friendly.
+    query_vector: tuple[float, ...] | None = field(default=None, repr=False)
     #: W1.a only: the traversal starts from tasks found by ANN, not from `seed_uid`.
     ann_entry_kind: str | None = None
     ann_m_seeds: int = 8
     #: Provenance for the report; never used in ranking.
     meta: dict[str, Any] = field(default_factory=dict, compare=False)
+
+
+def logical_spec_hash(spec: QuerySpec) -> str:
+    """Stable identity of the answer contract, independent of physical knobs."""
+
+    pred = spec.predicate
+    payload = {
+        "query_id": spec.query_id,
+        "decision_point": spec.decision_point,
+        "seed_uid": spec.seed_uid,
+        "relation": spec.relation,
+        "hops": spec.hops,
+        "predicate": {
+            "kind": pred.kind,
+            "require_valid": pred.require_valid,
+            "min_fitness": pred.min_fitness,
+            "fitness_gt": pred.fitness_gt,
+            "max_fitness": pred.max_fitness,
+            "exclude_sessions": sorted(pred.exclude_sessions),
+            "exclude_tasks": sorted(pred.exclude_tasks),
+            "include_tasks": None
+            if pred.include_tasks is None
+            else sorted(pred.include_tasks),
+            "failure_class": pred.failure_class,
+            "exclude_nodes": sorted(pred.exclude_nodes),
+            "require_fitness": pred.require_fitness,
+            "require_finite_fitness": pred.require_finite_fitness,
+        },
+        "k": spec.k,
+        "mode": spec.mode,
+        "rank_by": spec.rank_by,
+        "ann_entry_kind": spec.ann_entry_kind,
+        "ann_m_seeds": spec.ann_m_seeds,
+        "query_vector_sha256": None
+        if spec.query_vector is None
+        else hashlib.sha256(
+            json.dumps(spec.query_vector, separators=(",", ":")).encode()
+        ).hexdigest(),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -205,17 +284,19 @@ class Oracle:
 
     # -- entry points ----------------------------------------------------
 
-    def entries(self, spec: QuerySpec) -> list[str]:
-        """Where traversal starts.
+    def _query_vector(self, spec: QuerySpec) -> np.ndarray | None:
+        if spec.query_vector is not None:
+            query = np.asarray(spec.query_vector, dtype=np.float32)
+            norm = float(np.linalg.norm(query))
+            return query / norm if norm else query
+        return self.corpus.vector(spec.seed_uid)
 
-        For a task-seeded query this is an exact ANN over the Task vectors — the paper's
-        "vector-seeded" step. With 18 Tasks the exhaustive scan IS the exact answer, so
-        the oracle and a brute-force ANN coincide here by construction; that is a fact
-        about the corpus, not a shortcut.
-        """
+    def entry_rows(self, spec: QuerySpec) -> list[tuple[str, float]]:
+        """Exact ANN entries with the distance that defines the final order."""
+
         if spec.ann_entry_kind is None:
-            return [spec.seed_uid]
-        query = self.corpus.vector(spec.seed_uid)
+            return [(spec.seed_uid, 0.0)]
+        query = self._query_vector(spec)
         if query is None:
             return []
         if spec.ann_entry_kind == "task":
@@ -224,10 +305,6 @@ class Oracle:
             pool = sorted(self.corpus.nodes)
         else:
             pool = []
-        # The SAME exclusions the engine applies at stage 1. Applying them only at
-        # stage 2 would let the target's own vertices consume entry slots on one side
-        # and not the other, and the gap would surface as unexplained lost recall
-        # rather than as a mismatch anyone could locate.
         pred = spec.predicate
         pool = [
             uid
@@ -238,12 +315,30 @@ class Oracle:
             and self._entry_session(uid) not in pred.exclude_sessions
         ]
         distances = self.corpus.cosine_distance(query, pool)
-        order = sorted(
-            range(len(pool)),
-            key=lambda i: (float(distances[i]), pool[i]),
-        )
-        keep = [pool[i] for i in order if np.isfinite(distances[i])]
-        return keep[: spec.ann_m_seeds]
+        rows = [
+            (pool[i], float(distances[i]))
+            for i in range(len(pool))
+            if np.isfinite(distances[i])
+        ]
+        rows.sort(key=lambda row: (row[1], row[0]))
+        rows = rows[: spec.ann_m_seeds]
+        snapped: list[tuple[str, float]] = []
+        group_distance: float | None = None
+        for uid, distance in rows:
+            if group_distance is None or distance - group_distance > SEED_DISTANCE_TIE_EPS:
+                group_distance = distance
+            snapped.append((uid, group_distance))
+        return snapped
+
+    def entries(self, spec: QuerySpec) -> list[str]:
+        """Where traversal starts.
+
+        For a task-seeded query this is an exact ANN over the Task vectors — the paper's
+        "vector-seeded" step. With 18 Tasks the exhaustive scan IS the exact answer, so
+        the oracle and a brute-force ANN coincide here by construction; that is a fact
+        about the corpus, not a shortcut.
+        """
+        return [uid for uid, _ in self.entry_rows(spec)]
 
     def _entry_task(self, uid: str) -> str | None:
         if uid in self.corpus.tasks:
@@ -259,6 +354,8 @@ class Oracle:
 
     def run(self, spec: QuerySpec) -> OracleResult:
         entries: list[str] = []
+        entry_distances: dict[str, float] = {}
+        best_reaching_seed_distance: dict[str, float] = {}
         reached: list[str]
         if spec.mode == "filter_only":
             # No vector, no graph: every node the predicate admits.
@@ -279,11 +376,17 @@ class Oracle:
             entries = self.entries(spec)
             reached = list(entries)
         else:
-            entries = self.entries(spec)
+            entry_rows = self.entry_rows(spec)
+            entries = [uid for uid, _ in entry_rows]
+            entry_distances = dict(entry_rows)
             reached = []
             seen: set[str] = set()
             for entry in entries:
                 for uid in self.corpus.traverse(entry, relation=spec.relation, hops=spec.hops):
+                    distance = entry_distances.get(entry, 0.0)
+                    previous = best_reaching_seed_distance.get(uid)
+                    if previous is None or distance < previous:
+                        best_reaching_seed_distance[uid] = distance
                     if uid not in seen:
                         seen.add(uid)
                         reached.append(uid)
@@ -295,7 +398,7 @@ class Oracle:
         ]
         eligible.sort()
 
-        query = self.corpus.vector(spec.seed_uid)
+        query = self._query_vector(spec)
         if query is None:
             distances = np.full(len(eligible), np.inf)
         else:
@@ -320,13 +423,27 @@ class Oracle:
                 if np.isfinite(distances[i])
             ]
             ranked.sort(key=lambda pair: (pair[0], pair[1]))
-        else:
+        elif spec.rank_by == "reward":
             ranked = sorted(
                 (
                     (float(distances[i]), eligible[i])
                     for i in range(len(eligible))
                 ),
                 key=lambda pair: (-(self.corpus.nodes[pair[1]]["fitness"] or float("-inf")), pair[1]),
+            )
+        else:
+            # The approved physical-plan order.  The distance belongs to the ANN
+            # seed that reached the node, not to the output node's own embedding.
+            ranked = sorted(
+                (
+                    (best_reaching_seed_distance.get(uid, float("inf")), uid)
+                    for uid in eligible
+                ),
+                key=lambda pair: (
+                    pair[0],
+                    -float(self.corpus.nodes[pair[1]]["fitness"]),
+                    pair[1],
+                ),
             )
 
         topk = tuple(uid for _, uid in ranked[: spec.k])

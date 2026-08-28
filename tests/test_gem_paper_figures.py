@@ -7,7 +7,13 @@ import copy
 import csv
 import json
 
-from bench.agent_memory.gem_bench import comparison_export, export, figures, scaling
+from bench.agent_memory.gem_bench import (
+    combine,
+    comparison_export,
+    export,
+    figures,
+    scaling,
+)
 
 
 def _write_json(path, payload):
@@ -304,3 +310,79 @@ def test_export_comparison_bundle_includes_all_core_and_scale_points(tmp_path):
     assert (output_dir / "figures" / "figure9_scaling_comparison.png").exists()
     assert (output_dir / "raw" / "II_embedrag_scale_results.json").exists()
     assert manifest["comparability"]["official_external_systems"] is False
+
+
+def test_combine_runs_preserves_point_provenance_and_ignores_ephemeral_model_ids(
+    tmp_path,
+):
+    roots = [tmp_path / "first", tmp_path / "second"]
+    points = ["II_embedrag", "gem_conformant"]
+    base_manifest = {
+        "schema_version": "test",
+        "input": {"sha256": "corpus"},
+        "models": {
+            "answer": "answer-model",
+            "embedding": "embedding-model",
+            "answer_endpoint_models": [
+                {
+                    "id": "answer-model",
+                    "root": "answer-model",
+                    "max_model_len": 4096,
+                    "owned_by": "vllm",
+                    "created": 1,
+                    "permission": [{"id": "ephemeral-one"}],
+                }
+            ],
+            "embedding_endpoint_models": [],
+        },
+        "generation": {"temperature": 0},
+        "evaluation": {"judge_enabled": True},
+        "caps": {"top_k": 10},
+        "workload": {"questions": 2},
+        "tridb": {"dsn_redacted": "postgresql://***@localhost/db"},
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "operating_points": [],
+    }
+    sections = _sections()
+    for index, (root, point) in enumerate(zip(roots, points, strict=True)):
+        manifest = copy.deepcopy(base_manifest)
+        manifest["models"]["answer_endpoint_models"][0]["created"] = index + 1
+        manifest["models"]["answer_endpoint_models"][0]["permission"] = [
+            {"id": f"ephemeral-{index}"}
+        ]
+        paradigm = "II" if point == "II_embedrag" else "GEM"
+        metadata = {"key": point, "paradigm": paradigm, "label": point}
+        manifest["operating_points"] = [metadata]
+        _write_json(root / "run_manifest.json", manifest)
+        summary = {
+            "operating_point": metadata,
+            "section_4_1": {
+                key: value
+                for key, value in sections["section_4_1"]["rows"][0].items()
+                if key not in {"operating_point", "paradigm", "label"}
+            },
+            "section_4_2": {
+                key: value
+                for key, value in sections["section_4_2"]["rows"][0].items()
+                if key not in {"operating_point", "paradigm", "label"}
+            },
+            "section_4_8": {
+                key: value
+                for key, value in sections["section_4_8"]["rows"][0].items()
+                if key not in {"operating_point", "paradigm", "label"}
+            },
+            "energy": {"total_joules": 10.0},
+        }
+        _write_json(root / point / "summary.json", summary)
+
+    output_dir = tmp_path / "combined"
+    manifest = combine.combine_runs(
+        source_dirs=roots,
+        output_dir=output_dir,
+        points=points,
+    )
+
+    assert [item["operating_point"] for item in manifest["source_runs"]] == points
+    assert manifest["combined_from_multiple_serial_runs"] is True
+    assert (output_dir / "paper_sections.json").exists()
+    assert (output_dir / "report.md").exists()

@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import signal
 import subprocess
 import sys
 import time
@@ -39,8 +41,17 @@ MATH_TASKS = [
 RUNNER = "bench.agent_memory.gem_oe.run_arm"
 
 
-def cell_dir(out: Path, task: str, arm: str, rate: float | None = None) -> Path:
+def cell_dir(out: Path, task: str, arm: str, rate: float | None = None,
+             freq: float | None = None, seed: int | None = None) -> Path:
     suffix = "" if rate is None else f"__r{int(round(rate * 100)):03d}"
+    if freq is not None:
+        suffix += f"__p{int(round(freq * 100)):03d}"
+    # The seed is part of the cell identity, not a detail: three repeats of one
+    # configuration must not collide on one directory, and the 0.148 run-to-run
+    # spread measured on three identical `nocontext` cells is exactly why repeats
+    # exist. Omitted for a single-seed matrix so old paths keep resolving.
+    if seed is not None:
+        suffix += f"__s{seed}"
     return out / f"{task.replace(':', '_')}__{arm}{suffix}"
 
 
@@ -53,8 +64,24 @@ def run_cell(
     extra: list[str],
     timeout: float | None = None,
     rate: float | None = None,
+    freq: float | None = None,
+    seed: int | None = None,
+    skip_complete: bool = False,
 ) -> dict[str, Any]:
-    target = cell_dir(out, task, arm, rate)
+    target = cell_dir(out, task, arm, rate, freq, seed)
+    if skip_complete:
+        # Resume, so that raising --workers mid-experiment does not throw away the
+        # cells already paid for. A cell counts as done only on its own receipt
+        # saying `complete`; a partial cell is re-run from scratch, because
+        # OpenEvolve's checkpoint is not something this harness restores.
+        receipt = target / "run_receipt.json"
+        if receipt.exists():
+            try:
+                if json.loads(receipt.read_text()).get("status") == "complete":
+                    return {"task": task, "arm": arm, "dir": str(target),
+                            "returncode": 0, "skipped": True, "seconds": 0.0}
+            except (OSError, json.JSONDecodeError):
+                pass
     target.mkdir(parents=True, exist_ok=True)
     cmd = [
         python, "-m", RUNNER,
@@ -62,6 +89,8 @@ def run_cell(
         "--out", str(target),
         "--llm-base", endpoint,
         *(["--injection-rate", str(rate)] if rate is not None else []),
+        *(["--injection-frequency", str(freq)] if freq is not None else []),
+        *(["--seed", str(seed)] if seed is not None else []),
         *extra,
     ]
     log = target / "cell.log"
@@ -76,19 +105,38 @@ def run_cell(
     with log.open("w", encoding="utf-8") as handle:
         handle.write(" ".join(cmd) + "\n\n")
         handle.flush()
+        # `start_new_session` puts the cell in its own process GROUP, which is the
+        # only handle that reaches OpenEvolve's forked pool workers. Without it,
+        # `subprocess.run(timeout=...)` SIGKILLs the direct child only and the
+        # workers survive as orphans -- reparented to init, still holding an LLM
+        # connection. Measured: one cell reported "exceeded 3600.0s and was killed"
+        # and then logged a successful POST to the model 93 seconds later. A forked
+        # worker inherits the parent's /proc/pid/cmdline verbatim, so the orphan is
+        # indistinguishable from the cell it came from except by its PPID of 1.
+        proc = subprocess.Popen(
+            cmd, stdout=handle, stderr=subprocess.STDOUT, env=None,
+            start_new_session=True,
+        )
         try:
-            proc = subprocess.run(
-                cmd, stdout=handle, stderr=subprocess.STDOUT, env=None, timeout=timeout
-            )
-            returncode = proc.returncode
+            returncode = proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
             returncode = -1
-            handle.write(f"\n\n[run_matrix] cell exceeded {timeout}s and was killed\n")
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                proc.kill()
+            # Reap, so the entry does not linger as a zombie holding the log fd.
+            try:
+                proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                pass
+            handle.write(f"\n\n[run_matrix] cell exceeded {timeout}s; process group killed\n")
     return {
         "task": task,
         "arm": arm,
         "rate": rate,
+        "freq": freq,
         "endpoint": endpoint,
         "returncode": returncode,
         "timed_out": timed_out,
@@ -103,6 +151,24 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--tasks", nargs="*", default=MATH_TASKS)
     ap.add_argument("--arms", nargs="+", default=["none", "gem"])
+    ap.add_argument(
+        "--skip-complete", action="store_true",
+        help="Skip cells whose receipt already says complete. Use to resume a matrix "
+             "at a different --workers without re-running finished cells.",
+    )
+    ap.add_argument(
+        "--seeds", type=int, nargs="*", default=None,
+        help="Repeat every cell once per seed. Omit for a single run at the frozen "
+             "seed. Repeats are the only way to tell an arm difference from the "
+             "0.148 run-to-run spread already measured on this workload.",
+    )
+    ap.add_argument(
+        "--injection-frequencies", nargs="*", type=float, default=None,
+        help="arXiv:2606.29823's p, swept per memory arm: the per-step PROBABILITY "
+             "that memory fires at all. Orthogonal to --injection-rates, which sets "
+             "how many programs one firing carries. The paper's Figure 4 uses "
+             "{0.1, 0.5}; this experiment previously ran only at p=1.0.",
+    )
     ap.add_argument(
         "--injection-rates", nargs="*", type=float, default=None,
         help="fractions of the inspiration slots to fill from memory, e.g. "
@@ -140,27 +206,37 @@ def main(argv: list[str] | None = None) -> int:
     # arm `none` has no memory to meter, so it is the 0% point by construction and is
     # never expanded over the rate axis -- doing so would run identical cells under
     # different names.
-    cells: list[tuple[str, str, float | None]] = []
+    freqs = args.injection_frequencies or [None]
+    seeds: list[int | None] = list(args.seeds) if args.seeds else [None]
+    cells: list[tuple[str, str, float | None, float | None, int | None]] = []
     for task in args.tasks:
         for arm in args.arms:
-            # `nocontext` and `none` both inject nothing, so expanding them over the
-            # rate axis runs the same configuration under different names. (The first
-            # 7-task launch did exactly that and produced three identical nocontext
-            # cells per task -- useful by accident, as near-replicates under T=0.7
-            # give the run-to-run variance a single seed cannot, but not what the
-            # matrix was asked for.)
-            if arm in ("none", "nocontext") or not args.injection_rates:
-                cells.append((task, arm, None))
-            else:
-                cells.extend((task, arm, rate) for rate in args.injection_rates)
+            # `nocontext` and `none` inject nothing, so neither axis applies -- they
+            # are the p=0 point and expanding them would run one configuration under
+            # several names.
+            if arm in ("none", "nocontext"):
+                # Repeated too: the baseline needs its own variance estimate, or
+                # there is nothing to compare an arm's spread against.
+                cells.extend((task, arm, None, None, sd) for sd in seeds)
+                continue
+            rates = args.injection_rates or [None]
+            cells.extend(
+                (task, arm, r, f, sd) for r in rates for f in freqs for sd in seeds
+            )
     plan = [
-        (task, arm, rate, args.endpoints[i % len(args.endpoints)])
-        for i, (task, arm, rate) in enumerate(cells)
+        (task, arm, rate, freq, sd, args.endpoints[i % len(args.endpoints)])
+        for i, (task, arm, rate, freq, sd) in enumerate(cells)
     ]
     print(f"{len(plan)} cells over {len(args.endpoints)} replica(s)")
-    for task, arm, rate, endpoint in plan:
-        label = arm if rate is None else f"{arm}@{rate:.0%}"
-        print(f"  {task:<28} {label:<14} -> {endpoint}")
+    for task, arm, rate, freq, sd, endpoint in plan:
+        label = arm
+        if rate is not None:
+            label += f"@{rate:.0%}"
+        if freq is not None:
+            label += f"/p{freq:g}"
+        if sd is not None:
+            label += f"#s{sd}"
+        print(f"  {task:<28} {label:<20} -> {endpoint}")
     if args.dry_run:
         extra = [*extra, "--dry-run"]
 
@@ -170,9 +246,10 @@ def main(argv: list[str] | None = None) -> int:
     with ThreadPoolExecutor(max_workers=workers) as pool:
         results = list(pool.map(
             lambda item: run_cell(
-                args.python, item[0], item[1], item[3], args.out, extra,
+                args.python, item[0], item[1], item[5], args.out, extra,
                 timeout=None if args.dry_run else args.cell_timeout,
-                rate=item[2],
+                rate=item[2], freq=item[3], seed=item[4],
+                skip_complete=args.skip_complete,
             ),
             plan,
         ))
@@ -186,6 +263,8 @@ def main(argv: list[str] | None = None) -> int:
         "wall_seconds": round(time.perf_counter() - started, 1),
         "arms": args.arms,
         "injection_rates": args.injection_rates,
+        "injection_frequencies": args.injection_frequencies,
+        "seeds": args.seeds,
         "tasks": args.tasks,
         "endpoints": args.endpoints,
         "workers": workers,
@@ -200,8 +279,12 @@ def main(argv: list[str] | None = None) -> int:
             flag = "WEDGED"
         else:
             flag = f"FAIL({row['returncode']})"
-        label = row["arm"] if row.get("rate") is None else f"{row['arm']}@{row['rate']:.0%}"
-        print(f"  {flag} {row['task']:<28} {label:<14} {row['seconds']:>8.1f}s")
+        label = row["arm"]
+        if row.get("rate") is not None:
+            label += f"@{row['rate']:.0%}"
+        if row.get("freq") is not None:
+            label += f"/p{row['freq']:g}"
+        print(f"  {flag} {row['task']:<28} {label:<20} {row['seconds']:>8.1f}s")
     print(f"\n{len(ok)}/{len(results)} cells ok -> {args.out / 'matrix_summary.json'}")
     return 0 if len(ok) == len(results) else 1
 

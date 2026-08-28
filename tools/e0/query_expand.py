@@ -313,6 +313,8 @@ def expand(
     max_scan: int,
     max_anchor_candidates: int,
     seed: int,
+    dataset: str = DATASET,
+    query_prefix: str = "stark-prime",
 ) -> dict[str, Any]:
     entity_type, name_of, by_name = load_nodes(normalized_dir / "nodes.parquet")
     graph = Graph.load(normalized_dir / "edges.parquet")
@@ -359,14 +361,14 @@ def expand(
     rows: list[dict[str, Any]] = []
     for ordinal, row in enumerate(audited):
         record = dict(row)
-        record["query_id"] = f"stark-prime-{ordinal:03d}"
+        record["query_id"] = f"{query_prefix}-{ordinal:03d}"
         rows.append(record)
     for offset, found in enumerate(derived):
         ordinal = len(audited) + offset
         rows.append(
             {
-                "query_id": f"stark-prime-{ordinal:03d}",
-                "dataset": DATASET,
+                "query_id": f"{query_prefix}-{ordinal:03d}",
+                "dataset": dataset,
                 "source_query_id": found["source_query_id"],
                 "query_text": found["query_text"],
                 "answer_ids": found["answer_ids"],
@@ -422,6 +424,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-scan", type=int, default=1500)
     parser.add_argument("--max-anchor-candidates", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--dataset", default=DATASET)
+    parser.add_argument("--query-prefix", default="stark-prime")
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args(argv)
 
@@ -435,6 +439,8 @@ def main(argv: list[str] | None = None) -> int:
         max_scan=args.max_scan,
         max_anchor_candidates=args.max_anchor_candidates,
         seed=args.seed,
+        dataset=args.dataset,
+        query_prefix=args.query_prefix,
     )
     print(
         f"[query_expand] {manifest['total']} queries "

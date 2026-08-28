@@ -41,6 +41,7 @@ from bench.agent_memory.gem.types import (
     PhaseCost,
     StateDelta,
 )
+from bench.agent_memory.table5_track_c.tracing import stage_span
 
 _EMPTY_DELTA = StateDelta()
 
@@ -325,7 +326,13 @@ class IngestOperator:
                 "schema", "plan needs embed_text resolved but no embedder configured"
             )
         texts = [str(op["embed_text"]) for op in pending]
-        vectors = self.embedder.encode(texts)
+        with stage_span(
+            "embedding",
+            "tridb.document_embedding",
+            backend="qwen3_embedding_0.6b",
+            attributes={"observable_call_kind": "http_client"},
+        ):
+            vectors = self.embedder.encode(texts)
         if len(vectors) != len(pending):
             raise PlanValidationError(
                 "schema",
@@ -522,7 +529,16 @@ class IngestOperator:
                             "not an accuracy datapoint ([AM] §4.4)",
                         )
 
-                applied = self.apply(tx, accepted, scope_id=scope_id)
+                with stage_span(
+                    "persistence",
+                    "tridb.atomic_apply",
+                    backend="postgresql_vector_graph_relational",
+                    attributes={
+                        "stores": ["vector", "graph", "relational"],
+                        "one_transaction": True,
+                    },
+                ):
+                    applied = self.apply(tx, accepted, scope_id=scope_id)
                 units = tuple(applied["touched"])
                 rejections = [*strategy_rejections, *rejections]
 

@@ -144,7 +144,12 @@ class LLMMediatedIngestStrategy:
 
     # -- the output contract ---------------------------------------------
 
-    def validate(self, extracted: Mapping[str, Any]) -> tuple[bool, str | None]:
+    def validate(
+        self,
+        extracted: Mapping[str, Any],
+        *,
+        allowed_host_ids: set[int] | None = None,
+    ) -> tuple[bool, str | None]:
         """The gates, in order. Any failure rejects the UNIT, not the run.
 
         1. JSON parses (done by the caller before this point);
@@ -166,6 +171,14 @@ class LLMMediatedIngestStrategy:
         if "unit_id" in host:
             if not isinstance(host["unit_id"], int):
                 return False, "schema: host.unit_id is not an integer"
+            if (
+                allowed_host_ids is not None
+                and int(host["unit_id"]) not in allowed_host_ids
+            ):
+                return (
+                    False,
+                    "referential: host.unit_id was not offered in candidate_topics",
+                )
         elif not host.get("new_title"):
             return False, "schema: host has neither unit_id nor new_title"
 
@@ -223,6 +236,7 @@ class LLMMediatedIngestStrategy:
         # not exist yet without becoming a dangling vertex.
         titles_in_plan: dict[str, str] = {}
         pending_embeds: list[tuple[str, str]] = []
+        planned_fields: set[tuple[str, str]] = set()
 
         for event in events:
             for position, chunk in enumerate(self.chunker.chunk(event.content)):
@@ -230,7 +244,25 @@ class LLMMediatedIngestStrategy:
                 raw = self._extract(chunk, slate)
                 if raw is None:
                     continue
-                ok, reason = self.validate(raw)
+                allowed_host_ids = {
+                    int(candidate["unit_id"])
+                    for candidate in slate
+                    if isinstance(candidate.get("unit_id"), int)
+                }
+                ok, reason = self.validate(
+                    raw,
+                    allowed_host_ids=allowed_host_ids,
+                )
+                if ok and self.mode == MODE_BATCH:
+                    reason = self._batch_plan_conflict(
+                        raw,
+                        event,
+                        position,
+                        titles_in_plan,
+                        planned_fields,
+                        view,
+                    )
+                    ok = reason is None
                 if not ok:
                     self.rejections.append(
                         {
@@ -247,6 +279,7 @@ class LLMMediatedIngestStrategy:
                     position,
                     titles_in_plan,
                     pending_embeds,
+                    planned_fields,
                     view,
                 )
 
@@ -295,6 +328,7 @@ class LLMMediatedIngestStrategy:
         position: int,
         titles_in_plan: dict[str, str],
         pending_embeds: list[tuple[str, str]],
+        planned_fields: set[tuple[str, str]],
         view: MemoryView,
     ) -> list[Mapping[str, Any]]:
         ops: list[Mapping[str, Any]] = []
@@ -338,6 +372,8 @@ class LLMMediatedIngestStrategy:
                 )
 
         for fact in extraction.get("facts", []):
+            host_key = f"id:{host_id}" if host_id is not None else f"ref:{host_ref}"
+            field_key = (host_key, str(fact["field"]))
             supersede = bool(fact.get("supersede"))
             if self.mode == MODE_SEQUENTIAL and host_id is not None:
                 # III.b: embed the fact, then let the similarity search decide
@@ -345,6 +381,8 @@ class LLMMediatedIngestStrategy:
                 supersede = supersede or self._resolves_to_update(
                     view, host_id, str(fact["field"])
                 )
+            if self.mode == MODE_SEQUENTIAL and field_key in planned_fields:
+                supersede = True
             ops.append(
                 planmod.append_field_value(
                     ref=host_ref,
@@ -356,6 +394,7 @@ class LLMMediatedIngestStrategy:
                     provenance={**provenance, "confidence": fact.get("confidence")},
                 )
             )
+            planned_fields.add(field_key)
 
         for edge in extraction.get("edges", []):
             title = str(edge["dst_title"])
@@ -393,6 +432,41 @@ class LLMMediatedIngestStrategy:
                 )
             )
         return ops
+
+    def _batch_plan_conflict(
+        self,
+        extraction: Mapping[str, Any],
+        event: InteractionEvent,
+        position: int,
+        titles_in_plan: Mapping[str, str],
+        planned_fields: set[tuple[str, str]],
+        view: MemoryView,
+    ) -> str | None:
+        """Reject an append-only extraction that would create two currents."""
+        host = extraction["host"]
+        if "unit_id" in host:
+            unit_id = int(host["unit_id"])
+            host_key = f"id:{unit_id}"
+            existing = view.unit(unit_id) if view is not None else None
+        else:
+            title = str(host["new_title"])
+            host_ref = titles_in_plan.get(title) or f"{event.external_id}#{position}"
+            host_key = f"ref:{host_ref}"
+            existing = None
+
+        for fact in extraction.get("facts", []):
+            field = str(fact["field"])
+            if (host_key, field) in planned_fields:
+                return (
+                    "conflict: append-only plan already has a current value for "
+                    f"field {field!r} on this host"
+                )
+            if existing is not None and existing.current(field) is not None:
+                return (
+                    "conflict: append-only host already has a current value for "
+                    f"field {field!r}"
+                )
+        return None
 
     def _resolves_to_update(self, view: MemoryView, unit_id: int, field: str) -> bool:
         """III.b's ADD/UPDATE decision: does this field already have a value?"""
