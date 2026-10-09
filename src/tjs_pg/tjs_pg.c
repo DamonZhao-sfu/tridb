@@ -109,6 +109,8 @@
 #include "utils/snapmgr.h"
 #include "utils/hsearch.h"
 
+#include "vsgt_exec.h"
+
 PG_MODULE_MAGIC;
 
 /*
@@ -217,6 +219,7 @@ void		_PG_init(void);
 void
 _PG_init(void)
 {
+    vsgt_init();
 	DefineCustomIntVariable("tjs.graph_work_budget",
 							"Edge-step budget for one tjs_open() call's graph leg (plan 077 / ADR-0020).",
 							"Shared across all seeds in seedless mode, consumed nearest-seed-first. "

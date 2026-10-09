@@ -59,6 +59,8 @@
 #include "utils/inval.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+#include "utils/snapmgr.h"
+#include "gph_pull_api.h"
 
 #include "gph_page.h"
 #include "graphstore.h"
@@ -78,6 +80,9 @@ PG_MODULE_MAGIC;
  * v1 scope: this is commit/abort + crash visibility, NOT full cross-session snapshot isolation
  * (the concurrent-isolation case is DEV-1166 / the deferred per-tuple xmin/xmax §5 work).
  */
+/* Scoped only while the versioned VSGT API executes; legacy reads unchanged. */
+static Snapshot gph_pull_snapshot = NULL;
+
 static inline bool
 gph_xmin_visible(TransactionId xmin)
 {
@@ -85,6 +90,9 @@ gph_xmin_visible(TransactionId xmin)
 		return false;
 	if (TransactionIdIsCurrentTransactionId(xmin))
 		return true;
+	if (gph_pull_snapshot && TransactionIdIsNormal(xmin) &&
+        XidInMVCCSnapshot(xmin, gph_pull_snapshot))
+        return false;
 	return TransactionIdDidCommit(xmin);
 }
 
@@ -2758,6 +2766,88 @@ gph_edge_count(PG_FUNCTION_ARGS)
 	PG_RETURN_INT64((int64) meta.gm_edge_count);
 }
 
+/* VSGT shares native page traversal through a versioned rendezvous API.
+ * Relations/buffer pins never survive a call. The caller owns scan memory.
+ * Unlike gs_getnext, one Next accounts for ONE physical edge slot, so filtered
+ * slots cannot bypass a work budget. Snapshot applies to vertex/edge visibility.
+ */
+typedef struct GphPullScan
+{
+    GraphScanDesc scan;
+    Snapshot snapshot;
+} GphPullScan;
+
+static void *
+gph_pull_open(int64 src, uint32 type, Snapshot snapshot)
+{
+    GphPullScan *s = palloc0(sizeof(*s));
+    Relation rel;
+    s->snapshot = snapshot;
+    PG_TRY();
+    {
+        gph_pull_snapshot = snapshot;
+        rel = gph_open_store(AccessShareLock);
+        (void) gs_open(&s->scan, rel, src, GRAPH_SCAN_OUTGOING,
+                       type, GRAPHSTORE_INVALID_ID);
+        relation_close(rel, AccessShareLock);
+        gph_pull_snapshot = NULL;
+    }
+    PG_CATCH();
+    {
+        gph_pull_snapshot = NULL;
+        PG_RE_THROW();
+    }
+    PG_END_TRY();
+    return s;
+}
+
+static int
+gph_pull_next(void *opaque, int64 *dst)
+{
+    GphPullScan *s = opaque;
+    GraphScanDesc *scan = &s->scan;
+    Relation rel;
+    int result = 0;
+    PG_TRY();
+    {
+        gph_pull_snapshot = s->snapshot;
+        rel = gph_open_store(AccessShareLock);
+        if (scan->page_i < scan->page_n || gs_read_page_into_buf(rel, scan))
+        {
+            GphEdgeSlot *e = &scan->page_buf[scan->page_i++];
+            result = -1;
+            if (e->es_edge_type_id == scan->type_filter &&
+                gph_xmin_visible(e->es_xmin) &&
+                !gph_deleted_visible(e->es_flags, e->es_xmax))
+            {
+                *dst = e->es_dst_vid;
+                gph_visit_counter++;
+                result = 1;
+            }
+        }
+        relation_close(rel, AccessShareLock);
+        gph_pull_snapshot = NULL;
+    }
+    PG_CATCH();
+    {
+        gph_pull_snapshot = NULL;
+        PG_RE_THROW();
+    }
+    PG_END_TRY();
+    return result;
+}
+
+static void
+gph_pull_close(void *opaque)
+{
+    GphPullScan *s = opaque;
+    if (s) { gs_close(&s->scan); pfree(s); }
+}
+
+static GphPullApi gph_pull_api = {
+    1, gph_pull_open, gph_pull_next, gph_pull_close
+};
+
 /* ------------------------------------------------------------------ */
 /* GUC registration                                                     */
 /* ------------------------------------------------------------------ */
@@ -2766,6 +2856,7 @@ void _PG_init(void);
 void
 _PG_init(void)
 {
+    *find_rendezvous_variable(GPH_PULL_API_NAME) = &gph_pull_api;
 	DefineCustomBoolVariable("graph_store.assume_dense_open",
 							 "Try the O(1) dense vertex locate on traversal Open before the linear chain walk.",
 							 "Session opt-in only (advisor plan 048, ADR-0013 rider 1): enable ONLY when the "
