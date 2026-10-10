@@ -1,0 +1,105 @@
+{
+  "arm": "onread",
+  "scope": "fig1:mockfull:onread",
+  "events": 10672,
+  "ingest_plan": {
+    "mode": "deferred",
+    "trigger": "on_read",
+    "batch_every": 64,
+    "fix_candidates": 5
+  },
+  "consistency": "strong",
+  "replay_seconds": 210.57629542588256,
+  "ingest_seconds": {
+    "n": 10672,
+    "mean": 0.005859799383590738,
+    "p50": 0.00534822978079319,
+    "p95": 0.009774925885722041,
+    "sum": 62.535779021680355
+  },
+  "ingest_llm_during_replay": {
+    "n_sem": 7623,
+    "llm_calls": 5459,
+    "cache_hits": 2164,
+    "prompt_tokens": 882622,
+    "completion_tokens": 170042,
+    "llm_seconds": 0.0,
+    "llm_wall_seconds": 0.229543,
+    "llm_batches": 4155,
+    "invalid_replies": 0
+  },
+  "ingest_llm": {
+    "n_sem": 24399,
+    "llm_calls": 19220,
+    "cache_hits": 5179,
+    "prompt_tokens": 3858303,
+    "completion_tokens": 392547,
+    "llm_seconds": 0.0,
+    "llm_wall_seconds": 0.406903,
+    "llm_batches": 4221,
+    "invalid_replies": 0
+  },
+  "ingest_llm_by_op": {
+    "sem_extract": 10672,
+    "sem_match": 13727
+  },
+  "pending_left_before_final": 8222,
+  "final_materialize": {
+    "resolved": 8222,
+    "seconds": 15.798806730890647,
+    "llm": {
+      "n_sem": 16776,
+      "llm_calls": 13761,
+      "cache_hits": 3015,
+      "prompt_tokens": 2975681,
+      "completion_tokens": 222505,
+      "llm_seconds": 0.0,
+      "llm_wall_seconds": 0.17736000000000002,
+      "llm_batches": 66,
+      "invalid_replies": 0,
+      "by_op": {
+        "sem_extract": 5487,
+        "sem_match": 11289
+      }
+    }
+  },
+  "retrieve": {
+    "planned": {
+      "seconds": {
+        "n": 10479,
+        "mean": 0.014034619089415962,
+        "p50": 0.01131052803248167,
+        "p95": 0.031878204084932804,
+        "sum": 147.06877343798988
+      },
+      "llm": {
+        "n_sem": 29996,
+        "llm_calls": 10830,
+        "cache_hits": 19166,
+        "prompt_tokens": 2277851,
+        "completion_tokens": 32490,
+        "llm_seconds": 0.0,
+        "llm_wall_seconds": 0.324194,
+        "llm_batches": 3401,
+        "invalid_replies": 0
+      },
+      "totals": {
+        "rows_pulled": 29996.0,
+        "sem_evaluated": 29996.0,
+        "hints": 12752.0,
+        "resolved": 6004.0,
+        "staleness": 0.0,
+        "engine_seconds": 29.195757000000093,
+        "closed_early": 584.0,
+        "retrievals": 10479.0
+      }
+    }
+  },
+  "state_summary": {
+    "lessons": 10672,
+    "fixed_by": 6823,
+    "fixed_by_native": 6823,
+    "native_equals_mirror": true
+  },
+  "trace": []
+}

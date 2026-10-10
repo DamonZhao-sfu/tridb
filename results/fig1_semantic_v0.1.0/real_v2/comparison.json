@@ -1,0 +1,103 @@
+{
+  "tag": "realv2",
+  "events": 662,
+  "llm": "google/gemma-4-26B-A4B-it",
+  "mat_equal_to_eager": {
+    "eager": {
+      "lessons_equal": true,
+      "lessons_agree": 1.0,
+      "fixed_by_equal": true,
+      "fixed_by_native_equal": true,
+      "native_equals_mirror": true,
+      "fixed_by_jaccard": 1.0
+    },
+    "eager_ctl": {
+      "lessons_equal": false,
+      "lessons_agree": 0.5241691842900302,
+      "fixed_by_equal": false,
+      "fixed_by_native_equal": false,
+      "native_equals_mirror": true,
+      "fixed_by_jaccard": 0.8951310861423221
+    },
+    "onread": {
+      "lessons_equal": false,
+      "lessons_agree": 0.7054380664652568,
+      "fixed_by_equal": false,
+      "fixed_by_native_equal": false,
+      "native_equals_mirror": true,
+      "fixed_by_jaccard": 0.8884758364312267
+    },
+    "onread_stale": {
+      "lessons_equal": false,
+      "lessons_agree": 0.5377643504531722,
+      "fixed_by_equal": false,
+      "fixed_by_native_equal": false,
+      "native_equals_mirror": true,
+      "fixed_by_jaccard": 0.8947368421052632
+    },
+    "batch": {
+      "lessons_equal": false,
+      "lessons_agree": 0.620845921450151,
+      "fixed_by_equal": false,
+      "fixed_by_native_equal": false,
+      "native_equals_mirror": true,
+      "fixed_by_jaccard": 0.9056603773584906
+    }
+  },
+  "output_agreement_vs_eager_planned_mat": {
+    "eager/trimodal": {
+      "mean_jaccard": 0.702973137973138,
+      "exact_set": 0.56,
+      "exact_ordered": 0.56,
+      "same_text": 0.56
+    },
+    "eager/naive": {
+      "mean_jaccard": 0.9781282051282051,
+      "exact_set": 0.9476923076923077,
+      "exact_ordered": 0.9476923076923077,
+      "same_text": 0.9476923076923077
+    },
+    "eager/planned_mat": {
+      "mean_jaccard": 1.0,
+      "exact_set": 1.0,
+      "exact_ordered": 1.0,
+      "same_text": 1.0
+    },
+    "eager/planned": {
+      "mean_jaccard": 0.9911282051282051,
+      "exact_set": 0.9753846153846154,
+      "exact_ordered": 0.9753846153846154,
+      "same_text": 0.9753846153846154
+    },
+    "eager_ctl/planned": {
+      "mean_jaccard": 0.8913443223443224,
+      "exact_set": 0.8046153846153846,
+      "exact_ordered": 0.7953846153846154,
+      "same_text": 0.52
+    },
+    "onread/planned": {
+      "mean_jaccard": 0.9357240537240537,
+      "exact_set": 0.8738461538461538,
+      "exact_ordered": 0.8646153846153846,
+      "same_text": 0.7184615384615385
+    },
+    "onread_stale/planned": {
+      "mean_jaccard": 0.6536410256410257,
+      "exact_set": 0.5353846153846153,
+      "exact_ordered": 0.5323076923076923,
+      "same_text": 0.4230769230769231
+    },
+    "batch/planned": {
+      "mean_jaccard": 0.9196178266178265,
+      "exact_set": 0.8384615384615385,
+      "exact_ordered": 0.8323076923076923,
+      "same_text": 0.6276923076923077
+    }
+  },
+  "offline_replay": {
+    "lessons_equal": true,
+    "fixed_by_equal": true,
+    "fixed_by_native_equal": true,
+    "llm_calls": 0
+  }
+}

@@ -1,0 +1,118 @@
+corpus: 662 events, 4 tasks, llm=google/gemma-4-26B-A4B-it
+[eager] 100/662 events 50.6s
+[eager] 200/662 events 107.8s
+[eager] 300/662 events 163.8s
+[eager] 400/662 events 218.3s
+[eager] 500/662 events 273.8s
+[eager] 600/662 events 331.6s
+[eager] replay 363.3s ingest p50 323.8ms replay_llm_calls 1286 total 1286
+[eager_ctl] 100/662 events 36.4s
+[eager_ctl] 200/662 events 74.9s
+[eager_ctl] 300/662 events 117.1s
+[eager_ctl] 400/662 events 157.3s
+[eager_ctl] 500/662 events 195.7s
+[eager_ctl] 600/662 events 232.7s
+[eager_ctl] replay 254.6s ingest p50 319.9ms replay_llm_calls 1286 total 1286
+[onread] 100/662 events 24.0s
+[onread] 200/662 events 50.9s
+[onread] 300/662 events 74.5s
+[onread] 400/662 events 91.7s
+[onread] 500/662 events 110.3s
+[onread] 600/662 events 128.3s
+[onread] replay 138.0s ingest p50 5.4ms replay_llm_calls 411 total 1286
+[onread_stale] 100/662 events 5.5s
+[onread_stale] 200/662 events 13.5s
+[onread_stale] 300/662 events 21.3s
+[onread_stale] 400/662 events 27.3s
+[onread_stale] 500/662 events 33.7s
+[onread_stale] 600/662 events 39.7s
+[onread_stale] replay 43.0s ingest p50 4.9ms replay_llm_calls 0 total 1286
+[batch] 100/662 events 21.2s
+[batch] 200/662 events 44.6s
+[batch] 300/662 events 61.3s
+[batch] 400/662 events 75.8s
+[batch] 500/662 events 90.5s
+[batch] 600/662 events 106.2s
+[batch] replay 114.4s ingest p50 5.5ms replay_llm_calls 1243 total 1286
+[eager] 100/662 events 0.4s
+[eager] 200/662 events 0.7s
+[eager] 300/662 events 1.2s
+[eager] 400/662 events 1.5s
+[eager] 500/662 events 1.9s
+[eager] 600/662 events 2.4s
+{
+  "tag": "real1",
+  "events": 662,
+  "llm": "google/gemma-4-26B-A4B-it",
+  "mat_equal_to_eager": {
+    "eager": {
+      "lessons_equal": true,
+      "lessons_agree": 1.0,
+      "fixed_by_equal": true,
+      "fixed_by_jaccard": 1.0
+    },
+    "eager_ctl": {
+      "lessons_equal": false,
+      "lessons_agree": 0.7719033232628398,
+      "fixed_by_equal": false,
+      "fixed_by_jaccard": 0.909433962264151
+    },
+    "onread": {
+      "lessons_equal": false,
+      "lessons_agree": 0.48942598187311176,
+      "fixed_by_equal": false,
+      "fixed_by_jaccard": 0.8905660377358491
+    },
+    "onread_stale": {
+      "lessons_equal": false,
+      "lessons_agree": 0.5,
+      "fixed_by_equal": false,
+      "fixed_by_jaccard": 0.8905660377358491
+    },
+    "batch": {
+      "lessons_equal": false,
+      "lessons_agree": 0.4818731117824773,
+      "fixed_by_equal": false,
+      "fixed_by_jaccard": 0.8909774436090225
+    }
+  },
+  "output_agreement_vs_eager_planned_mat": {
+    "eager/trimodal": {
+      "mean_jaccard": 0.7197460317460318,
+      "exact_rate": 0.5646153846153846
+    },
+    "eager/naive": {
+      "mean_jaccard": 0.9809926739926741,
+      "exact_rate": 0.9569230769230769
+    },
+    "eager/planned_mat": {
+      "mean_jaccard": 1.0,
+      "exact_rate": 1.0
+    },
+    "eager/planned": {
+      "mean_jaccard": 0.9934468864468865,
+      "exact_rate": 0.9784615384615385
+    },
+    "eager_ctl/planned": {
+      "mean_jaccard": 0.9326227106227106,
+      "exact_rate": 0.8738461538461538
+    },
+    "onread/planned": {
+      "mean_jaccard": 0.8740085470085469,
+      "exact_rate": 0.7907692307692308
+    },
+    "onread_stale/planned": {
+      "mean_jaccard": 0.6503168498168499,
+      "exact_rate": 0.5323076923076923
+    },
+    "batch/planned": {
+      "mean_jaccard": 0.8732686202686203,
+      "exact_rate": 0.7861538461538462
+    }
+  },
+  "offline_replay": {
+    "lessons_equal": true,
+    "fixed_by_equal": true,
+    "llm_calls": 0
+  }
+}

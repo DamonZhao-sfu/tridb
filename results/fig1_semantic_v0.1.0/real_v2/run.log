@@ -1,0 +1,127 @@
+corpus: 662 events, 4 tasks, llm=google/gemma-4-26B-A4B-it
+[eager] 200/662 events 96.2s
+[eager] 400/662 events 198.1s
+[eager] 600/662 events 304.8s
+[eager] replay 336.4s ingest p50 309.8ms replay_llm_calls 1286 total 1286
+[eager_ctl] 200/662 events 72.3s
+[eager_ctl] 400/662 events 150.3s
+[eager_ctl] 600/662 events 222.9s
+[eager_ctl] replay 244.5s ingest p50 309.3ms replay_llm_calls 1286 total 1286
+[onread] 200/662 events 48.8s
+[onread] 400/662 events 88.7s
+[onread] 600/662 events 125.3s
+[onread] replay 134.9s ingest p50 5.3ms replay_llm_calls 411 total 1286
+[onread_stale] 200/662 events 13.4s
+[onread_stale] 400/662 events 27.3s
+[onread_stale] 600/662 events 39.5s
+[onread_stale] replay 42.9s ingest p50 4.9ms replay_llm_calls 0 total 1286
+[batch] 200/662 events 44.3s
+[batch] 400/662 events 75.4s
+[batch] 600/662 events 105.7s
+[batch] replay 114.1s ingest p50 5.3ms replay_llm_calls 1243 total 1286
+[eager] 200/662 events 0.6s
+[eager] 400/662 events 1.4s
+[eager] 600/662 events 2.2s
+{
+  "tag": "realv2",
+  "events": 662,
+  "llm": "google/gemma-4-26B-A4B-it",
+  "mat_equal_to_eager": {
+    "eager": {
+      "lessons_equal": true,
+      "lessons_agree": 1.0,
+      "fixed_by_equal": true,
+      "fixed_by_native_equal": true,
+      "native_equals_mirror": true,
+      "fixed_by_jaccard": 1.0
+    },
+    "eager_ctl": {
+      "lessons_equal": false,
+      "lessons_agree": 0.5241691842900302,
+      "fixed_by_equal": false,
+      "fixed_by_native_equal": false,
+      "native_equals_mirror": true,
+      "fixed_by_jaccard": 0.8951310861423221
+    },
+    "onread": {
+      "lessons_equal": false,
+      "lessons_agree": 0.7054380664652568,
+      "fixed_by_equal": false,
+      "fixed_by_native_equal": false,
+      "native_equals_mirror": true,
+      "fixed_by_jaccard": 0.8884758364312267
+    },
+    "onread_stale": {
+      "lessons_equal": false,
+      "lessons_agree": 0.5377643504531722,
+      "fixed_by_equal": false,
+      "fixed_by_native_equal": false,
+      "native_equals_mirror": true,
+      "fixed_by_jaccard": 0.8947368421052632
+    },
+    "batch": {
+      "lessons_equal": false,
+      "lessons_agree": 0.620845921450151,
+      "fixed_by_equal": false,
+      "fixed_by_native_equal": false,
+      "native_equals_mirror": true,
+      "fixed_by_jaccard": 0.9056603773584906
+    }
+  },
+  "output_agreement_vs_eager_planned_mat": {
+    "eager/trimodal": {
+      "mean_jaccard": 0.702973137973138,
+      "exact_set": 0.56,
+      "exact_ordered": 0.56,
+      "same_text": 0.56
+    },
+    "eager/naive": {
+      "mean_jaccard": 0.9781282051282051,
+      "exact_set": 0.9476923076923077,
+      "exact_ordered": 0.9476923076923077,
+      "same_text": 0.9476923076923077
+    },
+    "eager/planned_mat": {
+      "mean_jaccard": 1.0,
+      "exact_set": 1.0,
+      "exact_ordered": 1.0,
+      "same_text": 1.0
+    },
+    "eager/planned": {
+      "mean_jaccard": 0.9911282051282051,
+      "exact_set": 0.9753846153846154,
+      "exact_ordered": 0.9753846153846154,
+      "same_text": 0.9753846153846154
+    },
+    "eager_ctl/planned": {
+      "mean_jaccard": 0.8913443223443224,
+      "exact_set": 0.8046153846153846,
+      "exact_ordered": 0.7953846153846154,
+      "same_text": 0.52
+    },
+    "onread/planned": {
+      "mean_jaccard": 0.9357240537240537,
+      "exact_set": 0.8738461538461538,
+      "exact_ordered": 0.8646153846153846,
+      "same_text": 0.7184615384615385
+    },
+    "onread_stale/planned": {
+      "mean_jaccard": 0.6536410256410257,
+      "exact_set": 0.5353846153846153,
+      "exact_ordered": 0.5323076923076923,
+      "same_text": 0.4230769230769231
+    },
+    "batch/planned": {
+      "mean_jaccard": 0.9196178266178265,
+      "exact_set": 0.8384615384615385,
+      "exact_ordered": 0.8323076923076923,
+      "same_text": 0.6276923076923077
+    }
+  },
+  "offline_replay": {
+    "lessons_equal": true,
+    "fixed_by_equal": true,
+    "fixed_by_native_equal": true,
+    "llm_calls": 0
+  }
+}

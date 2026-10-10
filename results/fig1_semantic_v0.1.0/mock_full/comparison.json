@@ -1,0 +1,103 @@
+{
+  "tag": "mockfull",
+  "events": 10672,
+  "llm": "mock-llm-v1",
+  "mat_equal_to_eager": {
+    "eager": {
+      "lessons_equal": true,
+      "lessons_agree": 1.0,
+      "fixed_by_equal": true,
+      "fixed_by_native_equal": true,
+      "native_equals_mirror": true,
+      "fixed_by_jaccard": 1.0
+    },
+    "eager_ctl": {
+      "lessons_equal": true,
+      "lessons_agree": 1.0,
+      "fixed_by_equal": true,
+      "fixed_by_native_equal": true,
+      "native_equals_mirror": true,
+      "fixed_by_jaccard": 1.0
+    },
+    "onread": {
+      "lessons_equal": true,
+      "lessons_agree": 1.0,
+      "fixed_by_equal": true,
+      "fixed_by_native_equal": true,
+      "native_equals_mirror": true,
+      "fixed_by_jaccard": 1.0
+    },
+    "onread_stale": {
+      "lessons_equal": true,
+      "lessons_agree": 1.0,
+      "fixed_by_equal": true,
+      "fixed_by_native_equal": true,
+      "native_equals_mirror": true,
+      "fixed_by_jaccard": 1.0
+    },
+    "batch": {
+      "lessons_equal": true,
+      "lessons_agree": 1.0,
+      "fixed_by_equal": true,
+      "fixed_by_native_equal": true,
+      "native_equals_mirror": true,
+      "fixed_by_jaccard": 1.0
+    }
+  },
+  "output_agreement_vs_eager_planned_mat": {
+    "eager/trimodal": {
+      "mean_jaccard": 0.6921813768507156,
+      "exact_set": 0.5614085313484111,
+      "exact_ordered": 0.5614085313484111,
+      "same_text": 0.5614085313484111
+    },
+    "eager/naive": {
+      "mean_jaccard": 1.0,
+      "exact_set": 1.0,
+      "exact_ordered": 1.0,
+      "same_text": 1.0
+    },
+    "eager/planned_mat": {
+      "mean_jaccard": 1.0,
+      "exact_set": 1.0,
+      "exact_ordered": 1.0,
+      "same_text": 1.0
+    },
+    "eager/planned": {
+      "mean_jaccard": 1.0,
+      "exact_set": 1.0,
+      "exact_ordered": 1.0,
+      "same_text": 1.0
+    },
+    "eager_ctl/planned": {
+      "mean_jaccard": 0.9524448224634311,
+      "exact_set": 0.9421700543945033,
+      "exact_ordered": 0.9414066227693482,
+      "same_text": 0.9415020517224926
+    },
+    "onread/planned": {
+      "mean_jaccard": 0.9513298949886412,
+      "exact_set": 0.9359671724401183,
+      "exact_ordered": 0.9299551483920221,
+      "same_text": 0.9300505773451665
+    },
+    "onread_stale/planned": {
+      "mean_jaccard": 0.6280834713843589,
+      "exact_set": 0.5704742818971276,
+      "exact_ordered": 0.5704742818971276,
+      "same_text": 0.5357381429525718
+    },
+    "batch/planned": {
+      "mean_jaccard": 0.9337450456044787,
+      "exact_set": 0.9166905239049528,
+      "exact_ordered": 0.9159270922797977,
+      "same_text": 0.916022521232942
+    }
+  },
+  "offline_replay": {
+    "lessons_equal": true,
+    "fixed_by_equal": true,
+    "fixed_by_native_equal": true,
+    "llm_calls": 0
+  }
+}

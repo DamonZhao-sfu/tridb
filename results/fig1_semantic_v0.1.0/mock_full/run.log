@@ -1,0 +1,169 @@
+corpus: 10672 events, 18 tasks, llm=mock-llm-v1
+[eager] 1000/10672 events 24.7s
+[eager] 2000/10672 events 63.4s
+[eager] 3000/10672 events 96.4s
+[eager] 4000/10672 events 130.9s
+[eager] 5000/10672 events 165.7s
+[eager] 6000/10672 events 202.1s
+[eager] 7000/10672 events 239.0s
+[eager] 8000/10672 events 271.6s
+[eager] 9000/10672 events 302.9s
+[eager] 10000/10672 events 331.6s
+[eager] replay 349.8s ingest p50 7.2ms replay_llm_calls 19220 total 19220
+[eager_ctl] 1000/10672 events 10.1s
+[eager_ctl] 2000/10672 events 26.6s
+[eager_ctl] 3000/10672 events 46.4s
+[eager_ctl] 4000/10672 events 66.8s
+[eager_ctl] 5000/10672 events 82.0s
+[eager_ctl] 6000/10672 events 97.2s
+[eager_ctl] 7000/10672 events 112.4s
+[eager_ctl] 8000/10672 events 126.0s
+[eager_ctl] 9000/10672 events 140.4s
+[eager_ctl] 10000/10672 events 154.4s
+[eager_ctl] replay 163.7s ingest p50 7.0ms replay_llm_calls 19220 total 19220
+[onread] 1000/10672 events 11.1s
+[onread] 2000/10672 events 28.6s
+[onread] 3000/10672 events 48.9s
+[onread] 4000/10672 events 69.9s
+[onread] 5000/10672 events 88.8s
+[onread] 6000/10672 events 108.7s
+[onread] 7000/10672 events 129.0s
+[onread] 8000/10672 events 150.3s
+[onread] 9000/10672 events 172.5s
+[onread] 10000/10672 events 195.0s
+[onread] replay 210.6s ingest p50 5.3ms replay_llm_calls 5459 total 19220
+[onread_stale] 1000/10672 events 8.4s
+[onread_stale] 2000/10672 events 20.7s
+[onread_stale] 3000/10672 events 35.8s
+[onread_stale] 4000/10672 events 53.1s
+[onread_stale] 5000/10672 events 70.4s
+[onread_stale] 6000/10672 events 88.2s
+[onread_stale] 7000/10672 events 107.9s
+[onread_stale] 8000/10672 events 127.3s
+[onread_stale] 9000/10672 events 142.9s
+[onread_stale] 10000/10672 events 158.6s
+[onread_stale] replay 169.4s ingest p50 5.5ms replay_llm_calls 0 total 19220
+[batch] 1000/10672 events 8.6s
+[batch] 2000/10672 events 20.6s
+[batch] 3000/10672 events 35.1s
+[batch] 4000/10672 events 51.9s
+[batch] 5000/10672 events 68.8s
+[batch] 6000/10672 events 81.2s
+[batch] 7000/10672 events 93.5s
+[batch] 8000/10672 events 107.0s
+[batch] 9000/10672 events 121.2s
+[batch] 10000/10672 events 134.7s
+[batch] replay 144.1s ingest p50 4.6ms replay_llm_calls 19158 total 19220
+[eager] 1000/10672 events 5.0s
+[eager] 2000/10672 events 10.4s
+[eager] 3000/10672 events 15.7s
+[eager] 4000/10672 events 21.2s
+[eager] 5000/10672 events 27.4s
+[eager] 6000/10672 events 33.4s
+[eager] 7000/10672 events 39.5s
+[eager] 8000/10672 events 45.8s
+[eager] 9000/10672 events 52.3s
+[eager] 10000/10672 events 58.8s
+{
+  "tag": "mockfull",
+  "events": 10672,
+  "llm": "mock-llm-v1",
+  "mat_equal_to_eager": {
+    "eager": {
+      "lessons_equal": true,
+      "lessons_agree": 1.0,
+      "fixed_by_equal": true,
+      "fixed_by_native_equal": true,
+      "native_equals_mirror": true,
+      "fixed_by_jaccard": 1.0
+    },
+    "eager_ctl": {
+      "lessons_equal": true,
+      "lessons_agree": 1.0,
+      "fixed_by_equal": true,
+      "fixed_by_native_equal": true,
+      "native_equals_mirror": true,
+      "fixed_by_jaccard": 1.0
+    },
+    "onread": {
+      "lessons_equal": true,
+      "lessons_agree": 1.0,
+      "fixed_by_equal": true,
+      "fixed_by_native_equal": true,
+      "native_equals_mirror": true,
+      "fixed_by_jaccard": 1.0
+    },
+    "onread_stale": {
+      "lessons_equal": true,
+      "lessons_agree": 1.0,
+      "fixed_by_equal": true,
+      "fixed_by_native_equal": true,
+      "native_equals_mirror": true,
+      "fixed_by_jaccard": 1.0
+    },
+    "batch": {
+      "lessons_equal": true,
+      "lessons_agree": 1.0,
+      "fixed_by_equal": true,
+      "fixed_by_native_equal": true,
+      "native_equals_mirror": true,
+      "fixed_by_jaccard": 1.0
+    }
+  },
+  "output_agreement_vs_eager_planned_mat": {
+    "eager/trimodal": {
+      "mean_jaccard": 0.6921813768507156,
+      "exact_set": 0.5614085313484111,
+      "exact_ordered": 0.5614085313484111,
+      "same_text": 0.5614085313484111
+    },
+    "eager/naive": {
+      "mean_jaccard": 1.0,
+      "exact_set": 1.0,
+      "exact_ordered": 1.0,
+      "same_text": 1.0
+    },
+    "eager/planned_mat": {
+      "mean_jaccard": 1.0,
+      "exact_set": 1.0,
+      "exact_ordered": 1.0,
+      "same_text": 1.0
+    },
+    "eager/planned": {
+      "mean_jaccard": 1.0,
+      "exact_set": 1.0,
+      "exact_ordered": 1.0,
+      "same_text": 1.0
+    },
+    "eager_ctl/planned": {
+      "mean_jaccard": 0.9524448224634311,
+      "exact_set": 0.9421700543945033,
+      "exact_ordered": 0.9414066227693482,
+      "same_text": 0.9415020517224926
+    },
+    "onread/planned": {
+      "mean_jaccard": 0.9513298949886412,
+      "exact_set": 0.9359671724401183,
+      "exact_ordered": 0.9299551483920221,
+      "same_text": 0.9300505773451665
+    },
+    "onread_stale/planned": {
+      "mean_jaccard": 0.6280834713843589,
+      "exact_set": 0.5704742818971276,
+      "exact_ordered": 0.5704742818971276,
+      "same_text": 0.5357381429525718
+    },
+    "batch/planned": {
+      "mean_jaccard": 0.9337450456044787,
+      "exact_set": 0.9166905239049528,
+      "exact_ordered": 0.9159270922797977,
+      "same_text": 0.916022521232942
+    }
+  },
+  "offline_replay": {
+    "lessons_equal": true,
+    "fixed_by_equal": true,
+    "fixed_by_native_equal": true,
+    "llm_calls": 0
+  }
+}

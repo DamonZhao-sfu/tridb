@@ -1,0 +1,76 @@
+{
+  "tag": "real1",
+  "events": 662,
+  "llm": "google/gemma-4-26B-A4B-it",
+  "mat_equal_to_eager": {
+    "eager": {
+      "lessons_equal": true,
+      "lessons_agree": 1.0,
+      "fixed_by_equal": true,
+      "fixed_by_jaccard": 1.0
+    },
+    "eager_ctl": {
+      "lessons_equal": false,
+      "lessons_agree": 0.7719033232628398,
+      "fixed_by_equal": false,
+      "fixed_by_jaccard": 0.909433962264151
+    },
+    "onread": {
+      "lessons_equal": false,
+      "lessons_agree": 0.48942598187311176,
+      "fixed_by_equal": false,
+      "fixed_by_jaccard": 0.8905660377358491
+    },
+    "onread_stale": {
+      "lessons_equal": false,
+      "lessons_agree": 0.5,
+      "fixed_by_equal": false,
+      "fixed_by_jaccard": 0.8905660377358491
+    },
+    "batch": {
+      "lessons_equal": false,
+      "lessons_agree": 0.4818731117824773,
+      "fixed_by_equal": false,
+      "fixed_by_jaccard": 0.8909774436090225
+    }
+  },
+  "output_agreement_vs_eager_planned_mat": {
+    "eager/trimodal": {
+      "mean_jaccard": 0.7197460317460318,
+      "exact_rate": 0.5646153846153846
+    },
+    "eager/naive": {
+      "mean_jaccard": 0.9809926739926741,
+      "exact_rate": 0.9569230769230769
+    },
+    "eager/planned_mat": {
+      "mean_jaccard": 1.0,
+      "exact_rate": 1.0
+    },
+    "eager/planned": {
+      "mean_jaccard": 0.9934468864468865,
+      "exact_rate": 0.9784615384615385
+    },
+    "eager_ctl/planned": {
+      "mean_jaccard": 0.9326227106227106,
+      "exact_rate": 0.8738461538461538
+    },
+    "onread/planned": {
+      "mean_jaccard": 0.8740085470085469,
+      "exact_rate": 0.7907692307692308
+    },
+    "onread_stale/planned": {
+      "mean_jaccard": 0.6503168498168499,
+      "exact_rate": 0.5323076923076923
+    },
+    "batch/planned": {
+      "mean_jaccard": 0.8732686202686203,
+      "exact_rate": 0.7861538461538462
+    }
+  },
+  "offline_replay": {
+    "lessons_equal": true,
+    "fixed_by_equal": true,
+    "llm_calls": 0
+  }
+}

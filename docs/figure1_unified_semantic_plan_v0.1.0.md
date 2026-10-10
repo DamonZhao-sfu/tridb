@@ -306,3 +306,28 @@ Engine:
   - `test_traceml_evaluation_v3`
 
 This plan touches neither gate. It adds only Markdown under `docs/`.
+
+---
+
+## Addendum A: implementation status (2026-10-10, branch `feat/figure1-semantic-ops`)
+
+Spec-evolution rule: this addendum records what was built against the plan; the plan text
+above is unchanged. Results are in `docs/figure1_evotrace_experiment_v0.1.0.md`.
+
+| phase | status | where | notes |
+|---|---|---|---|
+| P−1 gates | **not done** (out of the goal's scope) | — | `make test` still has the 6 pre-existing collection errors; `make lint` still fails on untracked result trees. New and changed files are ruff-clean and their tests pass |
+| P0 schema + fixes | done | `bench/agent_memory/semantic/schema.sql` (`gem_sem_cache`, `gem_pending`); `gem/types.py`, `gem/store.py`; D10 `gem/revise.py::_repoint_edges`; D9 | the paper's pending set is written **Q** (R1) |
+| P1 semantic ops + cache | done | `bench/agent_memory/semantic/{llm,cache,ops}.py`, `gem/semops.py` | strict reply parsing; invalid replies fail closed and are not cached; after an insert the persisted cache row is authoritative (concurrent-miss race); offline replay raises `CacheMiss` |
+| P2 ingest as a plan | done | `gem/ingest_plan.py` (GEM); `fig1/memory.py` (EvoTrace) | GEM's derivation is order-dependent, so on-read must resolve the FIFO prefix (D2). The EvoTrace derivations read only immutable inputs with pinned candidate reads, so they are resolved per item. Eager ≡ deferred given the cache: verified live (GEM tests; EvoTrace real and mock runs) |
+| P3 retrieve as a plan | done | `gem/retrieve.py`; `fig1/memory.py` | strong reads resolve every returned item and wait on concurrent resolvers; stale reads report staleness; θpol ACL pushed with `scope_id`; token budget |
+| P4 planner | done (stock PG16) | `src/planner/join_order_sem.c` + `join_order_sem_ref.py` (join_order 0.2.0), `semantic/planner.py`, `semantic/stream.py` | C ≡ Python ref on 2,000 cases. The streaming θsem pulls bounded batches from a `tjs_vsgt` portal for every placement the planner can choose. `src/planner` is added to `scripts/pg17_graph_test.sh`, but that script is an untracked working-tree file, so the change is not committed. **Unbuilt here:** the PG13.4 fork and ARM64 (GX10) |
+| P5 downstream term | done | `gem/downstream.py` | beats the base rate only on MuSiQue; the features are correlational |
+| P6 evaluation hooks | done for EvoTrace | `bench/agent_memory/fig1/` | EXG/EvoMemBench/LongMemEval-V2 hooks not built |
+
+**Findings that change the plan or the paper**
+- **The cache is part of the semantics.** With the real LLM (gemma-4-26B, vLLM, temperature 0, seed 0), two identical eager runs agree on only 52% of extracted lessons. Eager ≡ deferred holds exactly only when the cache is shared (§2.3 of the experiment doc). The paper should state the cache as a correctness requirement, not an optimization.
+- **D2 is resolved by two conditions,** stated in `fig1/memory.py`: candidate reads pinned by an exact scan over id < vid(x), and inputs immutable under a single writer. The equivalence claim does not survive concurrent writers or mutable inputs.
+- **Predicate placement across a limit changes the answer** unless the candidate universe is fixed first. The logical query defines U as the first k_max θR-passing stream rows, and every plan computes that same result (found by adversarial review).
+- **VSGT use-after-free on updated rows**, found by this workload and fixed in `src/tjs_pg/vsgt_exec.c`, with regression test `test/vsgt_dead_tuple_test.sql`. The forked copy in `src/tjs_session_cursor/` (unbuilt) still has the pattern.
+- **Pre-existing flaky test:** `tests/test_gem_live.py::TestC6Write::test_the_c6_write_is_HOT` passes about half the time (4/100 non-HOT updates when it fails). It is unrelated to this branch's paths.
