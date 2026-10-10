@@ -49,8 +49,11 @@ class OpenAIChatClient:
         max_tokens: int = 256,
         timeout: float = 180.0,
         concurrency: int = 32,
+        retries: int = 6,
     ) -> None:
         import requests
+
+        self.retries = max(0, retries)
 
         self.base_url = base_url.rstrip("/")
         self.max_tokens = max_tokens
@@ -70,6 +73,27 @@ class OpenAIChatClient:
         self.model = model
 
     def complete(self, system: str, user: str) -> LLMReply:
+        """One pinned call; transient transport/5xx failures retry with backoff."""
+        import requests
+
+        delay = 1.0
+        for attempt in range(self.retries + 1):
+            try:
+                return self._complete_once(system, user)
+            except (requests.ConnectionError, requests.Timeout) as exc:
+                if attempt == self.retries:
+                    raise
+                last = exc
+            except requests.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else 0
+                if status < 500 or attempt == self.retries:
+                    raise
+                last = exc
+            time.sleep(delay)
+            delay = min(delay * 2, 30.0)
+        raise RuntimeError("unreachable") from last
+
+    def _complete_once(self, system: str, user: str) -> LLMReply:
         started = time.perf_counter()
         response = self._session.post(
             f"{self.base_url}/chat/completions",

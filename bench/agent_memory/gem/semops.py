@@ -126,6 +126,11 @@ class CachedCompletionClient:
             self.prompt_version,
             [(digest, {"text": text}, prompt_tokens, completion_tokens, seconds)],
         )
+        # ON CONFLICT DO NOTHING: if a concurrent writer stored this key first, its
+        # answer is authoritative, so the derived state stays reproducible from cache.
+        persisted = self.cache.get_many(self.op, self.model, self.prompt_version, [digest])
+        if digest in persisted and isinstance(persisted[digest], dict):
+            text = str(persisted[digest].get("text", text))
         self.stats.misses += 1
         self.stats.prompt_tokens += prompt_tokens
         self.stats.completion_tokens += completion_tokens

@@ -96,6 +96,26 @@ def arm_database(dsn: str, scope: str, *, create: bool = True) -> str:
     return make_conninfo(**params)
 
 
+def copy_cache(source_dsn: str, conn: Any) -> int:
+    """Seed this arm's gem_sem_cache with the eager arm's verdicts ("given the cache")."""
+    from psycopg.types.json import Jsonb
+
+    with psycopg.connect(source_dsn) as src:
+        rows = src.execute(
+            "SELECT op, model, prompt_version, input_hash, output, prompt_tokens,"
+            " completion_tokens, llm_seconds FROM gem_sem_cache"
+        ).fetchall()
+    with conn.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO gem_sem_cache (op, model, prompt_version, input_hash, output,"
+            " prompt_tokens, completion_tokens, llm_seconds) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
+            " ON CONFLICT DO NOTHING",
+            [(*row[:4], Jsonb(row[4]), *row[5:]) for row in rows],
+        )
+    conn.commit()
+    return len(rows)
+
+
 def build_llm(args: argparse.Namespace) -> Any:
     if args.llm == "real":
         return OpenAIChatClient(
@@ -128,13 +148,20 @@ def run_arm(
     conn = psycopg.connect(target, autocommit=False)
     conn.execute("CREATE EXTENSION IF NOT EXISTS join_order")
     conn.commit()
-    ns = namespace or arm
+    ns = namespace or ("shared" if args.shared_cache else arm)
     ingest_ops = SemOps(
         Namespaced(llm, f"{args.tag}:{ns}:ingest"), SemCache(conn), SemMeter()
     )
     ingest_ops.offline = offline
     memory = Fig1Memory(conn, scope, ingest_ops, planner=SemPlanner(conn))
     memory.setup()
+    if args.shared_cache and arm != "eager" and database_of is None:
+        copied = copy_cache(
+            arm_database(args.dsn, f"fig1:{args.tag}:eager", create=False), conn
+        )
+        print(
+            f"[{arm}] shared cache: copied {copied} rows from the eager arm", flush=True
+        )
     if arm == "eager":
         iplan = IngestPlan(mode="eager", fix_candidates=args.fix_k)
         plans = list(args.plans)
@@ -144,7 +171,10 @@ def run_arm(
         plans, consistency = ["planned"], "strong"
     elif arm == "batch":
         iplan = IngestPlan(
-            mode="deferred", trigger="batch", batch_every=args.batch_every
+            mode="deferred",
+            trigger="batch",
+            batch_every=args.batch_every,
+            fix_candidates=args.fix_k,
         )
         plans, consistency = ["planned"], "strong"
     else:
@@ -175,7 +205,7 @@ def run_arm(
     ingest_secs: list[float] = []
     retrieve_secs: dict[str, list[float]] = defaultdict(list)
     per_plan: dict[str, dict[str, Any]] = defaultdict(lambda: defaultdict(float))
-    outputs: dict[str, list[list[int]]] = defaultdict(list)
+    outputs: dict[str, list[tuple[list[str], str]]] = defaultdict(list)
     events: list[dict[str, Any]] = []
     started = time.perf_counter()
     for t, uid in enumerate(corpus.timeline):
@@ -188,7 +218,7 @@ def run_arm(
                 )
                 _hints, rec = memory.retrieve(parent, rplans[p], ops=rops[p])
                 retrieve_secs[p].append(rec.seconds)
-                outputs[p].append(rec.extra["out_ids"])
+                outputs[p].append((rec.extra["out_ids"], rec.extra["out_text_sha"]))
                 agg = per_plan[p]
                 for key in (
                     "rows_pulled",
@@ -215,7 +245,7 @@ def run_arm(
     before_final = ingest_ops.meter.snapshot()
     replay_llm = {k: v for k, v in before_final.items() if k != "by_op"}
     t0 = time.perf_counter()
-    final_resolved = memory.materialize(by="batch", fix_k=args.fix_k)
+    final_resolved = memory.materialize(by="batch")
     final_seconds = time.perf_counter() - t0
     final_cost = ingest_ops.meter.diff(before_final)
     state = memory.materialized_state()
@@ -252,7 +282,8 @@ def run_arm(
         "state_summary": {
             "lessons": sum(1 for v in state["lessons"].values() if v),
             "fixed_by": len(state["fixed_by"]),
-            "am_fixed_by_edges": state["am_fixed_by_edges"],
+            "fixed_by_native": len(state["fixed_by_native"]),
+            "native_equals_mirror": state["fixed_by_native"] == state["fixed_by"],
         },
         "trace": events,
     }
@@ -284,6 +315,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--batch-every", type=int, default=64)
     ap.add_argument("--tag", default=time.strftime("r%Y%m%dT%H%M%S"))
     ap.add_argument("--replay-check", action="store_true")
+    ap.add_argument(
+        "--shared-cache",
+        action="store_true",
+        help="all arms share one cache namespace, seeded from the eager arm "
+        "(tests Mat equivalence 'given the cache'; LLM counts are then not comparable)",
+    )
     ap.add_argument("--trace", type=int, default=0)
     ap.add_argument("--progress", type=int, default=500)
     ap.add_argument("--out", type=Path, required=True)
@@ -331,6 +368,10 @@ def main(argv: list[str] | None = None) -> int:
                 "lessons_equal": run["state"]["lessons"] == ref_state["lessons"],
                 "lessons_agree": _agree(run["state"]["lessons"], ref_state["lessons"]),
                 "fixed_by_equal": run["state"]["fixed_by"] == ref_state["fixed_by"],
+                "fixed_by_native_equal": run["state"]["fixed_by_native"]
+                == ref_state["fixed_by_native"],
+                "native_equals_mirror": run["state"]["fixed_by_native"]
+                == run["state"]["fixed_by"],
                 "fixed_by_jaccard": _jac_pairs(
                     run["state"]["fixed_by"], ref_state["fixed_by"]
                 ),
@@ -343,15 +384,10 @@ def main(argv: list[str] | None = None) -> int:
             for p, outs in run["outputs"].items():
                 if base is None or len(outs) != len(base):
                     continue
-                vals = [jaccard(a, b) for a, b in zip(outs, base, strict=True)]
-                comparison["output_agreement_vs_eager_planned_mat"][f"{arm}/{p}"] = {
-                    "mean_jaccard": statistics.fmean(vals) if vals else 1.0,
-                    "exact_rate": statistics.fmean(
-                        [1.0 if v == 1.0 else 0.0 for v in vals]
-                    )
-                    if vals
-                    else 1.0,
-                }
+                pairs = list(zip(outs, base, strict=True))
+                comparison["output_agreement_vs_eager_planned_mat"][f"{arm}/{p}"] = (
+                    _agreement(pairs)
+                )
         if args.replay_check:
             replay = run_arm(
                 "eager",
@@ -360,13 +396,15 @@ def main(argv: list[str] | None = None) -> int:
                 _Disabled(llm),
                 f"fig1:{args.tag}:eager_replay",
                 offline=True,
-                namespace="eager",
+                namespace="shared" if args.shared_cache else "eager",
                 retrieve=False,
                 database_of=f"fig1:{args.tag}:eager",
             )
             comparison["offline_replay"] = {
                 "lessons_equal": replay["state"]["lessons"] == ref_state["lessons"],
                 "fixed_by_equal": replay["state"]["fixed_by"] == ref_state["fixed_by"],
+                "fixed_by_native_equal": replay["state"]["fixed_by_native"]
+                == ref_state["fixed_by_native"],
                 "llm_calls": replay["result"]["ingest_llm"]["llm_calls"],
             }
     (args.out / "comparison.json").write_text(
@@ -389,6 +427,26 @@ class _Disabled:
         if prompts:
             raise RuntimeError("LLM disabled during offline replay")
         return []
+
+
+def _agreement(pairs: list[tuple[Any, Any]]) -> dict[str, float]:
+    """Per-retrieval agreement: set Jaccard, exact set, exact ordered list, same text."""
+    if not pairs:
+        return {
+            "mean_jaccard": 1.0,
+            "exact_set": 1.0,
+            "exact_ordered": 1.0,
+            "same_text": 1.0,
+        }
+    jac = [jaccard(a[0], b[0]) for a, b in pairs]
+    return {
+        "mean_jaccard": statistics.fmean(jac),
+        "exact_set": statistics.fmean([1.0 if v == 1.0 else 0.0 for v in jac]),
+        "exact_ordered": statistics.fmean(
+            [1.0 if a[0] == b[0] else 0.0 for a, b in pairs]
+        ),
+        "same_text": statistics.fmean([1.0 if a[1] == b[1] else 0.0 for a, b in pairs]),
+    }
 
 
 def _agree(a: dict[str, Any], b: dict[str, Any]) -> float:

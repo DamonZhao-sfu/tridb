@@ -41,6 +41,7 @@ class SemMeter:
     llm_seconds: float = 0.0  # sum of per-call service times
     wall_seconds: float = 0.0  # wall time spent inside LLM batches
     batches: int = 0
+    invalid: int = 0  # replies that broke the output contract (fail-closed, uncached)
     by_op: dict[str, int] = field(default_factory=dict)
 
     @property
@@ -57,6 +58,7 @@ class SemMeter:
             "llm_seconds": round(self.llm_seconds, 6),
             "llm_wall_seconds": round(self.wall_seconds, 6),
             "llm_batches": self.batches,
+            "invalid_replies": self.invalid,
             "by_op": dict(self.by_op),
         }
 

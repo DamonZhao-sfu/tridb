@@ -1,6 +1,6 @@
 """Render a Figure 1 experiment directory (arm JSONs + comparison.json) as Markdown tables.
 
-    python3 -m bench.agent_memory.fig1.report results/fig1_semantic_v0.1.0/real_slice
+python3 -m bench.agent_memory.fig1.report results/fig1_semantic_v0.1.0/real_slice
 """
 
 from __future__ import annotations
@@ -33,7 +33,9 @@ def render(directory: Path) -> str:
     arms, comp = _load(directory)
     out: list[str] = [f"# Figure 1 experiment: `{directory}`", ""]
     if comp:
-        out.append(f"LLM `{comp.get('llm')}`, {comp.get('events')} events, tag `{comp.get('tag')}`.")
+        out.append(
+            f"LLM `{comp.get('llm')}`, {comp.get('events')} events, tag `{comp.get('tag')}`."
+        )
         out.append("")
 
     out += [
@@ -85,24 +87,29 @@ def render(directory: Path) -> str:
         out += [
             "## Mat(S) equivalence vs eager (after final materialization)",
             "",
-            "| arm | lessons equal | lessons agree | fixed_by equal | fixed_by Jaccard |",
-            "|---|---|---:|---|---:|",
+            "| arm | lessons equal | lessons agree | fixed_by equal (mirror) |"
+            " fixed_by equal (native AM) | AM == mirror | fixed_by Jaccard |",
+            "|---|---|---:|---|---|---|---:|",
         ]
         for a, v in comp["mat_equal_to_eager"].items():
             out.append(
                 f"| {a} | {v['lessons_equal']} | {v.get('lessons_agree', 1.0):.4f} |"
-                f" {v['fixed_by_equal']} | {v['fixed_by_jaccard']:.4f} |"
+                f" {v['fixed_by_equal']} | {v.get('fixed_by_native_equal')} |"
+                f" {v.get('native_equals_mirror')} | {v['fixed_by_jaccard']:.4f} |"
             )
         out.append("")
     if comp.get("output_agreement_vs_eager_planned_mat"):
         out += [
             "## Retrieved-set agreement vs eager/planned_mat (per retrieval)",
             "",
-            "| arm/plan | mean Jaccard | exact-set rate |",
-            "|---|---:|---:|",
+            "| arm/plan | mean Jaccard | exact set | exact ordered | same text |",
+            "|---|---:|---:|---:|---:|",
         ]
         for k, v in comp["output_agreement_vs_eager_planned_mat"].items():
-            out.append(f"| {k} | {v['mean_jaccard']:.4f} | {v['exact_rate']:.4f} |")
+            out.append(
+                f"| {k} | {v['mean_jaccard']:.4f} | {v.get('exact_set', v.get('exact_rate', 0)):.4f} |"
+                f" {v.get('exact_ordered', float('nan')):.4f} | {v.get('same_text', float('nan')):.4f} |"
+            )
         out.append("")
     if comp.get("offline_replay"):
         v = comp["offline_replay"]

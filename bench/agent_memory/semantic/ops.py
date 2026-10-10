@@ -30,15 +30,28 @@ class CacheMiss(RuntimeError):
     """Raised in offline (replay) mode when an evaluation is not in the cache."""
 
 
+class InvalidReply(ValueError):
+    """The model's reply does not satisfy the operator's output contract."""
+
+
 @dataclass(frozen=True)
 class OpSpec:
     name: str
     prompt_version: str
     system: str
-    parse: Callable[[Any, str], Any]  # (parsed_json_or_None, raw_text) -> output
+    parse: Callable[
+        [Any, str], Any
+    ]  # (parsed_json_or_None, raw) -> output | InvalidReply
+    fallback: Any  # fail-closed value for an invalid reply (never cached)
+
+
+_TRUE = {"true", "yes"}
+_FALSE = {"false", "no"}
 
 
 def _bool_field(*keys: str) -> Callable[[Any, str], Any]:
+    """Strict: a JSON bool (or the strings true/false/yes/no) under one of ``keys``."""
+
     def parse(obj: Any, raw: str) -> Any:
         if isinstance(obj, dict):
             for key in keys:
@@ -46,11 +59,13 @@ def _bool_field(*keys: str) -> Callable[[Any, str], Any]:
                     value = obj[key]
                     if isinstance(value, bool):
                         return value
-                    if isinstance(value, str):
-                        return value.strip().lower() in {"true", "yes", "1"}
-                    return bool(value)
-        low = (raw or "").strip().lower()
-        return low.startswith("yes") or low.startswith("true")
+                    if (
+                        isinstance(value, str)
+                        and value.strip().lower() in _TRUE | _FALSE
+                    ):
+                        return value.strip().lower() in _TRUE
+                    raise InvalidReply(f"{key}={value!r} is not a boolean")
+        raise InvalidReply(f"no boolean field {keys} in reply {raw[:80]!r}")
 
     return parse
 
@@ -59,9 +74,13 @@ def _text_field(*keys: str, limit: int = 600) -> Callable[[Any, str], Any]:
     def parse(obj: Any, raw: str) -> Any:
         if isinstance(obj, dict):
             for key in keys:
-                if isinstance(obj.get(key), str):
+                if isinstance(obj.get(key), str) and obj[key].strip():
                     return obj[key][:limit]
-        return (raw or "").strip()[:limit]
+            raise InvalidReply(f"no text field {keys} in reply {raw[:80]!r}")
+        text = (raw or "").strip()
+        if not text:
+            raise InvalidReply("empty reply")
+        return text[:limit]
 
     return parse
 
@@ -69,14 +88,15 @@ def _text_field(*keys: str, limit: int = 600) -> Callable[[Any, str], Any]:
 def _score(obj: Any, raw: str) -> float:
     if isinstance(obj, dict):
         for key in ("score", "relevance"):
-            if key in obj:
-                try:
-                    return float(obj[key])
-                except (TypeError, ValueError):
-                    break
-        if "h" in obj:  # MockLLM default reply
-            return float(int(str(obj["h"])[:2], 16) % 11)
-    return 0.0
+            if (
+                key in obj
+                and isinstance(obj[key], (int, float))
+                and not isinstance(obj[key], bool)
+            ):
+                return float(obj[key])
+        if isinstance(obj.get("h"), str):  # MockLLM default reply
+            return float(int(obj["h"][:2], 16) % 11)
+    raise InvalidReply(f"no numeric score in reply {raw[:80]!r}")
 
 
 SPECS: dict[str, OpSpec] = {
@@ -86,6 +106,7 @@ SPECS: dict[str, OpSpec] = {
         "You extract information. Follow the instruction and reply with JSON only: "
         '{"text": "<at most 60 words>"}.',
         _text_field("text", "lesson", "h"),
+        "",
     ),
     "sem_filter": OpSpec(
         "sem_filter",
@@ -93,6 +114,7 @@ SPECS: dict[str, OpSpec] = {
         "You decide whether an item satisfies a condition. Reply with JSON only: "
         '{"keep": true|false}.',
         _bool_field("keep", "verdict"),
+        False,
     ),
     "sem_match": OpSpec(
         "sem_match",
@@ -100,6 +122,7 @@ SPECS: dict[str, OpSpec] = {
         "You decide whether a relation holds between LEFT and RIGHT. Reply with JSON only: "
         '{"match": true|false}.',
         _bool_field("match", "verdict"),
+        False,
     ),
     "sem_conflict": OpSpec(
         "sem_conflict",
@@ -107,6 +130,7 @@ SPECS: dict[str, OpSpec] = {
         "You decide whether statement A and statement B contradict each other. Reply with "
         'JSON only: {"conflict": true|false}.',
         _bool_field("conflict", "verdict"),
+        False,
     ),
     "sem_rank": OpSpec(
         "sem_rank",
@@ -114,6 +138,7 @@ SPECS: dict[str, OpSpec] = {
         "You score how useful an item is for a query on a 0-10 scale. Reply with JSON only: "
         '{"score": <integer 0-10>}.',
         _score,
+        0.0,
     ),
     "sem_summarize": OpSpec(
         "sem_summarize",
@@ -121,6 +146,7 @@ SPECS: dict[str, OpSpec] = {
         "You summarize items under a word budget. Reply with JSON only: "
         '{"text": "<summary>"}.',
         _text_field("text", "summary", "h", limit=4000),
+        "",
     ),
 }
 
@@ -161,6 +187,7 @@ class SemOps:
                 miss_order.append(h)
         if miss_order and self.offline:
             raise CacheMiss(f"{op}: {len(miss_order)} evaluation(s) not in cache")
+        invalid: dict[str, Any] = {}
         if miss_order:
             prompts = [(spec.system, canonical(miss_input[h])) for h in miss_order]
             started = time.perf_counter()
@@ -169,8 +196,17 @@ class SemOps:
             self.meter.batches += 1
             new_rows = []
             for h, reply in zip(miss_order, replies, strict=True):
-                output = spec.parse(parse_json_reply(reply.text), reply.text)
-                found[h] = output
+                self.meter.prompt_tokens += reply.prompt_tokens
+                self.meter.completion_tokens += reply.completion_tokens
+                self.meter.llm_seconds += reply.seconds
+                try:
+                    output = spec.parse(parse_json_reply(reply.text), reply.text)
+                except InvalidReply:
+                    # Fail closed for this call, and do NOT cache: a formatting failure
+                    # must not become a permanent semantic decision.
+                    invalid[h] = spec.fallback
+                    self.meter.invalid += 1
+                    continue
                 new_rows.append(
                     (
                         h,
@@ -180,15 +216,20 @@ class SemOps:
                         reply.seconds,
                     )
                 )
-                self.meter.prompt_tokens += reply.prompt_tokens
-                self.meter.completion_tokens += reply.completion_tokens
-                self.meter.llm_seconds += reply.seconds
             self.cache.put_many(op, self.model, spec.prompt_version, new_rows)
+            # The persisted row is authoritative: if a concurrent writer inserted the same
+            # key first (ON CONFLICT DO NOTHING), use ITS answer, so derived state is
+            # always reproducible from the cache.
+            persisted = self.cache.get_many(
+                op, self.model, spec.prompt_version, [r[0] for r in new_rows]
+            )
+            for h, output, *_ in new_rows:
+                found[h] = persisted.get(h, output)
         calls = len(miss_order)
         self.meter.calls += calls
         self.meter.hits += len(inputs) - calls
         self.meter.by_op[op] = self.meter.by_op.get(op, 0) + len(inputs)
-        return [found[h] for h in hashes]
+        return [found[h] if h in found else invalid[h] for h in hashes]
 
     # -- operators ----------------------------------------------------------
 
@@ -217,7 +258,10 @@ class SemOps:
         return sorted(range(len(items)), key=lambda i: (-float(scores[i]), i))
 
     def sem_topk(self, query: Any, items: Sequence[Any], k: int) -> list[int]:
-        return self.sem_rank(query, items)[: max(0, k)]
+        """Top-k of a bounded prefix; the caller bounds ``items`` (ADR-0007)."""
+        if k <= 0 or not items:
+            return []
+        return self.sem_rank(query, items)[:k]
 
     def sem_summarize(self, items: Sequence[Any], budget_words: int) -> str:
         if not items:

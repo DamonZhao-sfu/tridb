@@ -68,8 +68,14 @@ class PendingQueue:
         targets: Sequence[str] | None = None,
         limit: int | None = None,
         lock: bool = True,
+        skip_locked: bool = True,
     ) -> list[PendingItem]:
-        """Pending items in snapshot (FIFO) order. ``lock`` takes row locks (SKIP LOCKED)."""
+        """Pending items in snapshot (FIFO) order.
+
+        ``lock`` takes row locks. Background/batch resolvers use SKIP LOCKED to share
+        work; a strong read passes ``skip_locked=False`` so it WAITS for a concurrent
+        resolver instead of silently reading an unresolved item.
+        """
         sql = [
             "SELECT id, scope_id, derivation, target_ref, trigger, snapshot_seq, payload"
             " FROM gem_pending WHERE scope_id = %s AND status = 'pending'"
@@ -88,7 +94,7 @@ class PendingQueue:
             sql.append(" LIMIT %s")
             args.append(int(limit))
         if lock:
-            sql.append(" FOR UPDATE SKIP LOCKED")
+            sql.append(" FOR UPDATE SKIP LOCKED" if skip_locked else " FOR UPDATE")
         rows = self.conn.execute("".join(sql), args).fetchall()
         return [
             PendingItem(int(r[0]), r[1], r[2], r[3], r[4], int(r[5]), dict(r[6] or {}))
@@ -107,7 +113,8 @@ class PendingQueue:
 
     def fail(self, item_id: int, error: str) -> None:
         self.conn.execute(
-            "UPDATE gem_pending SET status = 'failed', error = %s WHERE id = %s",
+            "UPDATE gem_pending SET status = 'failed', error = %s"
+            " WHERE id = %s AND status = 'pending'",
             (error[:2000], item_id),
         )
 

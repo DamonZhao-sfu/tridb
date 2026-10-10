@@ -103,14 +103,20 @@ def test_live_eager_and_deferred_materialize_equal_state(tmp_path: Path) -> None
     comp = json.loads((tmp_path / "comparison.json").read_text())
     for arm, verdict in comp["mat_equal_to_eager"].items():
         assert verdict["lessons_equal"] and verdict["fixed_by_equal"], arm
+        assert verdict["fixed_by_native_equal"] and verdict["native_equals_mirror"], arm
     assert comp["offline_replay"] == {
         "lessons_equal": True,
         "fixed_by_equal": True,
+        "fixed_by_native_equal": True,
         "llm_calls": 0,
     }
     agree = comp["output_agreement_vs_eager_planned_mat"]
     # Same state, same plan order: streaming and materialized plans return the same set.
-    assert agree["eager/planned"]["exact_rate"] == 1.0
+    assert agree["eager/planned"]["exact_ordered"] == 1.0
+    # Same logical query over the same candidate universe: predicate order changes cost,
+    # never the answer (deterministic LLM, identical state).
+    assert agree["eager/naive"]["exact_ordered"] == 1.0
+    assert agree["eager/naive"]["same_text"] == 1.0
     eager = json.loads((tmp_path / "eager.json").read_text())
     onread = json.loads((tmp_path / "onread.json").read_text())
     stale = json.loads((tmp_path / "onread_stale.json").read_text())
