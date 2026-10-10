@@ -10,10 +10,11 @@
  * in-tree PGXS extension against the fork's PG 13.4 (built/tested on the GX10).
  *
  * SCOPE (honest): this ships the FROZEN, testable decision core + GUC + a SQL surface for
- * the parity test. The planner_hook integration (doc §10.5) is DEFERRED: the TJS operator
- * (DEV-1169) is a C SRF, not a CustomScan plan node, so "rewrite the driving child" does not
- * map onto it yet. The decision functions here are exactly what that hook will call once TJS
- * grows a CustomScan form; wiring is a documented follow-on, not part of this port.
+ * the parity test. The planner_hook integration (doc §10.5) is still DEFERRED, by ADR-0011
+ * Option B (decide at the lowering site, no global planner_hook). A CustomScan form of TJS now
+ * exists (the `tjs_vsgt` CustomScan in src/tjs_pg), so the old "TJS is only an SRF" blocker is
+ * gone; the decision functions here are what the lowering calls, and hook wiring remains a
+ * documented follow-on, not part of this port.
  */
 
 #include "postgres.h"

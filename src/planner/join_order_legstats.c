@@ -33,12 +33,10 @@
  * the metapage to derive avg_out_degree; the layout header lives in the graph_store source tree
  * (src/graph_store/gph_page.h).
  *
- * BUILD WIRING (GX10, follow-on): this translation unit is still a DRAFT and is NOT yet compiled
- * by src/planner/Makefile (OBJS = join_order.o only). When the Option-B lowering (ADR-0011) wires
- * tridb_build_legstats into the planner, the planner Makefile must (a) add join_order_legstats.o to
- * OBJS and (b) add the graph_store include dir, e.g. `PG_CPPFLAGS += -I$(top_srcdir)/src/graph_store`
- * (or a relative -I../graph_store), so this #include resolves. Out of plan 006's file scope to edit
- * the Makefile here; recorded so the seam is unambiguous.
+ * BUILD WIRING: src/planner/Makefile compiles this translation unit (join_order_legstats.o is in
+ * OBJS) and adds `PG_CPPFLAGS += -I$(srcdir)/../graph_store` so this #include resolves. Any build
+ * that copies src/planner elsewhere must make ../graph_store resolve too (see
+ * scripts/join_order_cost_test.sh and scripts/pg17_graph_test.sh).
  */
 #include "gph_page.h"
 

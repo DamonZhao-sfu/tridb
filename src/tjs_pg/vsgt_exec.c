@@ -265,12 +265,28 @@ static bool passes(VsgtState *s, TupleTableSlot *slot, bool seed)
     if (!ok) { if (seed) s->st->seed_filtered++; else s->st->output_filtered++; }
     s->st->predicate_ms+=millis(t);return ok;
 }
+/*
+ * Index AM calls run in the request context, never in the per-row scratch context.
+ * btgettuple lazily pallocs so->killedItems in CurrentMemoryContext the first time it
+ * meets a dead heap tuple (kill_prior_tuple); if that happens under scratch, the next
+ * scratch reset frees it and index_endscan() pfrees a dangling pointer ("could not find
+ * block containing chunk", or a SIGSEGV). Updated payload rows make this routine.
+ * Regression: test/vsgt_dead_tuple_test.sql.
+ */
 static bool probe_node(VsgtState *s,int64 vid)
 {
-    ScanKeyData key; bool result;
+    ScanKeyData key; bool result; MemoryContext prev=MemoryContextSwitchTo(s->ctx);
     ScanKeyInit(&key,1,BTEqualStrategyNumber,F_INT8EQ,Int64GetDatum(vid));
     index_rescan(s->probe,&key,1,NULL,0);ExecClearTuple(s->slot);
     result=index_getnext_slot(s->probe,ForwardScanDirection,s->slot);
+    MemoryContextSwitchTo(prev);
+    return result;
+}
+static bool anchor_next(VsgtState *s)
+{
+    MemoryContext prev=MemoryContextSwitchTo(s->ctx);
+    bool result=index_getnext_slot(s->anchor_scan,ForwardScanDirection,s->anchor_slot);
+    MemoryContextSwitchTo(prev);
     return result;
 }
 static bool seen_add(SeenEntry *table,uint32 mask,uint32 epoch,int64 vid)
@@ -419,7 +435,7 @@ static bool next_anchor(VsgtState *s,int64 *vid)
     if(!s->vector_only && s->st->seeds>=s->m) return false;
     if(s->graph_only)
     {
-        while(s->st->anchors<s->ann_budget && index_getnext_slot(s->anchor_scan,ForwardScanDirection,s->anchor_slot))
+        while(s->st->anchors<s->ann_budget && anchor_next(s))
         {
             MemoryContextReset(s->scratch);CHECK_FOR_INTERRUPTS();
             s->st->anchors++; /* Manifest source cap; no ANN work. */

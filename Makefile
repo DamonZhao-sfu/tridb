@@ -1,4 +1,4 @@
-.PHONY: test lint gem-demo-fetch gem-demo graph-test stock-graph-test stock-crash-test stock-dump-restore-test stock-upgrade-test stock-writer-lock-test stock-release-smoke tjs-parity-test smoke-test test-all baseline-up baseline-down seed bench bench-live sweep sm2 fetch-dataset bench-public bench-repro fetch-hotpot graphrag graphrag-live bench-filtered ablation recall-decay tjs-open-ref tjs-open-live graphrag-h2h rabitq-sim gpu-build-index gpu-setup gpu-verify gpu-lock wiki-fetch wiki-extract wiki-scale wiki-neo4j wiki-subgraph wiki-linkpred mcp-demo agent-memory-test agent-memory-lme-smoke agent-memory-lme agent-memory-locomo gem-bench-smoke gem-bench gem-bench-figures gem-bench-paper gem-scale-prepare gem-paper-smoke gem-paper-core gem-paper-scale gem-paper-export gem-paper-all gem-compare-core gem-compare-scale gem-compare-figures gem-compare-export gem-compare-all lock clean clean-data
+.PHONY: test lint join-order-sem-test gem-demo-fetch gem-demo graph-test stock-graph-test stock-crash-test stock-dump-restore-test stock-upgrade-test stock-writer-lock-test stock-release-smoke tjs-parity-test smoke-test test-all baseline-up baseline-down seed bench bench-live sweep sm2 fetch-dataset bench-public bench-repro fetch-hotpot graphrag graphrag-live bench-filtered ablation recall-decay tjs-open-ref tjs-open-live graphrag-h2h rabitq-sim gpu-build-index gpu-setup gpu-verify gpu-lock wiki-fetch wiki-extract wiki-scale wiki-neo4j wiki-subgraph wiki-linkpred mcp-demo agent-memory-test agent-memory-lme-smoke agent-memory-lme agent-memory-locomo gem-bench-smoke gem-bench gem-bench-figures gem-bench-paper gem-scale-prepare gem-paper-smoke gem-paper-core gem-paper-scale gem-paper-export gem-paper-all gem-compare-core gem-compare-scale gem-compare-figures gem-compare-export gem-compare-all lock clean clean-data
 
 PUBLIC_DATASET ?= gist-960-euclidean
 
@@ -23,7 +23,9 @@ STOCK_TESTS := test/graph_store_am_test.sql test/graph_store_test.sql \
                test/tjs_ppr_test.sql test/tjs_scan_budget_test.sql \
                test/tjs_filter_probe_test.sql \
                test/vsgt_semantics_test.sql test/vsgt_streaming_test.sql \
-               test/vsgt_lifecycle_test.sql test/vsgt_upgrade_test.sql
+               test/vsgt_lifecycle_test.sql test/vsgt_upgrade_test.sql \
+               test/vsgt_dead_tuple_test.sql \
+               test/join_order_sem_test.sql
 
 ENGINE_TESTS := test/graph_store_test.sql test/trimodal_compose.sql \
                 test/trimodal_early_term.sql test/fork_distance_probe.sql \
@@ -113,6 +115,12 @@ stock-graph-test:
 	  echo "=== $$t (stock PG$(PG_MAJOR)) ==="; \
 	  bash scripts/pg17_graph_test.sh $(STOCK_IMAGE) $$t || exit 1; \
 	done
+
+# Figure-1 P4 (ADR-0026): semantic placement in src/planner against a RUNNING stock PG (no Docker):
+# PGXS build+install, test/join_order_sem_test.sql, and a C<->join_order_sem_ref.py parity grid.
+# Env: PG_CONFIG, PGHOST, PGPORT, DESTDIR (see the script header).
+join-order-sem-test:
+	bash scripts/join_order_sem_test.sh
 
 # Stock-PG WAL crash-recovery (REDO) gate (advisor plan 090): the stock mirror of the
 # fork's scripts/crash_recovery_test.sh — 5 scenarios (committed / uncommitted /
