@@ -51,7 +51,9 @@ SYSTEMS = {
 QWEN32_ROOT = "table5_track_c_qps_sweep_snapshot_2026_08_20_v2"
 PREPARED_ADD_ROOT = "expc_prepared_item_add_2026_08_23_v10"
 EVERMEMOS_QWEN32_SEARCH_ROOT = "expc_evermemos_qwen32_tp2_gpu01_2026_08_23_v9"
-COGNEE_TIMEOUT300_ROOT = "table5_reproduction_2026_08_19/cognee_gpu0_search_timeout300_v1"
+COGNEE_TIMEOUT300_ROOT = (
+    "table5_reproduction_2026_08_19/cognee_gpu0_search_timeout300_v1"
+)
 SEARCH_RETRY_ROOT_PREFIX = "expc_search_timeout300_retries_2026_08_23_v14_"
 MANDOL_SEARCH_ROOT_PREFIX = "table5_track_c_mandol_search_resume_2026_08_23_v"
 GRAPHITI_QWEN32_ROOT_PREFIX = "expc_graphiti_llm_free_2026_08_23_v14m"
@@ -209,33 +211,34 @@ def selected_canonical(path: Path, receipt: dict[str, Any], source_root: Path) -
                 # QPS=10 is superseded by the complete timeout-300 rerun.
                 return False
             if qps == 5.0 and any(
-                source_root.glob(
-                    f"{SEARCH_RETRY_ROOT_PREFIX}*/**/run_receipt.json"
-                )
+                source_root.glob(f"{SEARCH_RETRY_ROOT_PREFIX}*/**/run_receipt.json")
             ):
                 return False
-        if system == "memos" and phase == "search" and nested(
-            receipt, "protocol", "qps"
-        ) == 10.0 and any(
-            source_root.glob(f"{SEARCH_RETRY_ROOT_PREFIX}*/**/run_receipt.json")
+        if (
+            system == "memos"
+            and phase == "search"
+            and nested(receipt, "protocol", "qps") == 10.0
+            and any(
+                source_root.glob(f"{SEARCH_RETRY_ROOT_PREFIX}*/**/run_receipt.json")
+            )
         ):
             return False
         return True
     if relative.startswith(f"{PREPARED_ADD_ROOT}/"):
-        return system in {"mem0", "memos", "evermemos_paper_proxy"} and phase == "add:native"
+        return (
+            system in {"mem0", "memos", "evermemos_paper_proxy"}
+            and phase == "add:native"
+        )
     if relative.startswith(f"{EVERMEMOS_QWEN32_SEARCH_ROOT}/"):
         return system == "evermemos_paper_proxy" and phase == "search"
     if relative.startswith(f"{COGNEE_TIMEOUT300_ROOT}/"):
         return system == "cognee" and phase == "search"
     if root.startswith(SEARCH_RETRY_ROOT_PREFIX):
-        return (
-            phase == "search"
-            and (
-                system == "cognee"
-                and nested(receipt, "protocol", "qps") == 5.0
-                or system == "memos"
-                and nested(receipt, "protocol", "qps") == 10.0
-            )
+        return phase == "search" and (
+            system == "cognee"
+            and nested(receipt, "protocol", "qps") == 5.0
+            or system == "memos"
+            and nested(receipt, "protocol", "qps") == 10.0
         )
     if root.startswith(MANDOL_SEARCH_ROOT_PREFIX):
         return system == "mandol" and phase == "search"
@@ -262,9 +265,7 @@ def selected_canonical(path: Path, receipt: dict[str, Any], source_root: Path) -
         return phase in {"search", "add:native"}
     if relative.startswith("expc_evermemos_locomo_2026_08_21/search/"):
         return not any(
-            source_root.glob(
-                f"{EVERMEMOS_QWEN32_SEARCH_ROOT}/**/run_receipt.json"
-            )
+            source_root.glob(f"{EVERMEMOS_QWEN32_SEARCH_ROOT}/**/run_receipt.json")
         )
     return False
 
@@ -394,7 +395,9 @@ def suitability(path: Path, receipt: dict[str, Any], selected: bool) -> tuple[st
 def stage_role(receipt: dict[str, Any]) -> str:
     conformance = receipt.get("llm_conformance") or {}
     if conformance.get("passed") is True and conformance.get("llm_call_count") == 0:
-        return "prepared-item insertion; LLM forbidden fail-closed; observed LLM calls=0"
+        return (
+            "prepared-item insertion; LLM forbidden fail-closed; observed LLM calls=0"
+        )
     stages = nested(receipt, "time_breakdown", "stages") or {}
     if "llm" in stages:
         return "LLM span included in measured request"
@@ -712,9 +715,7 @@ def write_comparison_sheet(
     selected = {
         (row["system"], int(row["qps"])): row
         for row in rows
-        if row["selected"]
-        and row["workload"] == workload
-        and row["qps"] is not None
+        if row["selected"] and row["workload"] == workload and row["qps"] is not None
     }
     for system in HEADLINE_SYSTEMS:
         label, version = SYSTEMS[system]

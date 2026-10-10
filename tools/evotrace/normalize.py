@@ -240,7 +240,9 @@ def _opt_strip(text: str | None) -> str | None:
     return None if text is None else strip_nul(text)
 
 
-def _clean_metrics(metrics: dict[str, Any]) -> tuple[dict[str, Any], list[str], list[str]]:
+def _clean_metrics(
+    metrics: dict[str, Any],
+) -> tuple[dict[str, Any], list[str], list[str]]:
     nonfinite: list[str] = []
     nul: list[str] = []
     cleaned = json_safe(metrics, "", nonfinite, nul)
@@ -421,7 +423,11 @@ def _load_programs(base: Path, acc: SessionAccum) -> None:
         for ctx_id in row.get("other_context_ids") or []:
             if ctx_id in seen_context:
                 acc.rejects.append(
-                    {"reason": "duplicate_context_id", "node_uid": uid, "context_id": ctx_id}
+                    {
+                        "reason": "duplicate_context_id",
+                        "node_uid": uid,
+                        "context_id": ctx_id,
+                    }
                 )
                 continue
             seen_context.add(ctx_id)
@@ -535,9 +541,7 @@ def _load_llm_calls(base: Path, acc: SessionAccum) -> None:
 def _session_record(acc: SessionAccum) -> dict[str, Any]:
     valid = [n for n in acc.nodes if n["is_valid"] and n["fitness"] is not None]
     best = max(valid, key=lambda n: n["fitness"], default=None)
-    prompt_complete = (
-        len(acc.prompts) / len(acc.nodes) if acc.nodes else 0.0
-    )
+    prompt_complete = len(acc.prompts) / len(acc.nodes) if acc.nodes else 0.0
     return {
         "session_uid": acc.uid,
         "task_uid": acc.parsed.task_uid,
@@ -662,7 +666,8 @@ def normalize(root: Path, revision: str = REVISION) -> dict[str, Any]:
                     "task_uid": acc.parsed.task_uid,
                     "domain": acc.parsed.domain,
                     "task_key": acc.parsed.task_key,
-                    "task_family": acc.parsed.task_key.rstrip("0123456789-_") or acc.parsed.task_key,
+                    "task_family": acc.parsed.task_key.rstrip("0123456789-_")
+                    or acc.parsed.task_key,
                     "session_count": 0,
                     "node_count": 0,
                     "backends": [],
@@ -744,7 +749,10 @@ def normalize(root: Path, revision: str = REVISION) -> dict[str, Any]:
             handle.close()
 
     (out / "tasks.jsonl").write_text(
-        "".join(dumps(t) + "\n" for t in sorted(task_index.values(), key=lambda t: t["task_uid"]))
+        "".join(
+            dumps(t) + "\n"
+            for t in sorted(task_index.values(), key=lambda t: t["task_uid"])
+        )
     )
     (out / "sessions.jsonl").write_text("".join(dumps(s) + "\n" for s in sessions))
     (out / "artifacts.jsonl").write_text(
@@ -821,7 +829,9 @@ def _integrity_report(
         "domain_split": dict(domains),
         "backend_split": dict(backends),
         "core_graph_ready_runs": sum(1 for r in readiness if r["core_graph_ready"]),
-        "runs_with_prompts": sum(1 for r in readiness if r["prompt_complete_ratio"] > 0),
+        "runs_with_prompts": sum(
+            1 for r in readiness if r["prompt_complete_ratio"] > 0
+        ),
         "runs_with_evaluator": sum(1 for r in readiness if r["evaluator_ref_present"]),
         # Leakage-relevant: the same code text appearing in more than one session is
         # exactly what a cross-session split must audit for.
@@ -853,9 +863,11 @@ def print_report(report: dict[str, Any]) -> None:
     print("")
     print(f"domains         : {report['domain_split']}")
     print(f"backends        : {report['backend_split']}")
-    print(f"unique artifacts: {obs['unique_artifacts']:,} "
-          f"(refs {obs['artifact_references']:,}, "
-          f"shared across sessions {report['artifacts_shared_across_sessions']:,})")
+    print(
+        f"unique artifacts: {obs['unique_artifacts']:,} "
+        f"(refs {obs['artifact_references']:,}, "
+        f"shared across sessions {report['artifacts_shared_across_sessions']:,})"
+    )
     print(f"core-ready runs : {report['core_graph_ready_runs']}/{obs['sessions']}")
     print(f"runs w/ prompts : {report['runs_with_prompts']}/{obs['sessions']}")
     print(f"rejects         : {report['reject_counts'] or 'none'}")
@@ -868,13 +880,18 @@ def print_report(report: dict[str, Any]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
-    parser.add_argument("--check", action="store_true", help="print the stored report only")
+    parser.add_argument(
+        "--check", action="store_true", help="print the stored report only"
+    )
     args = parser.parse_args(argv)
 
     report_path = args.root / "normalized" / "integrity_report.json"
     if args.check:
         if not report_path.is_file():
-            print(f"no report at {report_path}; run without --check first", file=sys.stderr)
+            print(
+                f"no report at {report_path}; run without --check first",
+                file=sys.stderr,
+            )
             return 2
         print_report(json.loads(report_path.read_text()))
         return 0

@@ -135,8 +135,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     task_deltas: defaultdict[str, list[float]] = defaultdict(list)
     for row in rows:
         task_deltas[str(row["task_uid"])].append(
-            float(row["staged"]["time_to_k_ms"])
-            - float(row["fused"]["time_to_k_ms"])
+            float(row["staged"]["time_to_k_ms"]) - float(row["fused"]["time_to_k_ms"])
         )
     iterations = int(summary["latency_ms"]["paired"]["iterations"])
     seed = int(summary["latency_ms"]["paired"]["seed"])
@@ -201,18 +200,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             "annotation": summary["quality_gate"]["annotation"],
         },
         "latency_ms": {
-            "fused_time_to_first_row": _distribution(
-                values("fused", "first_row_ms")
-            ),
+            "fused_time_to_first_row": _distribution(values("fused", "first_row_ms")),
             "fused_time_to_k": _distribution(values("fused", "time_to_k_ms")),
-            "staged_time_to_first_row": _distribution(
-                values("staged", "first_row_ms")
-            ),
+            "staged_time_to_first_row": _distribution(values("staged", "first_row_ms")),
             "staged_time_to_k": _distribution(values("staged", "time_to_k_ms")),
             "paired": paired,
-            "staged_vector_stage": _distribution(
-                values("staged", "vector_stage_ms")
-            ),
+            "staged_vector_stage": _distribution(values("staged", "vector_stage_ms")),
             "staged_graph_stage": _distribution(values("staged", "graph_stage_ms")),
             "staged_final_filter_rank": _distribution(
                 values("staged", "final_filter_rank_ms")

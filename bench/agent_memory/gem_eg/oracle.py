@@ -42,6 +42,7 @@ import hashlib
 import json
 import math
 from dataclasses import dataclass, field
+from collections.abc import Iterable
 from typing import Any, Literal
 
 import numpy as np
@@ -120,11 +121,20 @@ class Predicate:
             return False
         if node["task_uid"] in self.exclude_tasks:
             return False
-        if self.include_tasks is not None and node["task_uid"] not in self.include_tasks:
+        if (
+            self.include_tasks is not None
+            and node["task_uid"] not in self.include_tasks
+        ):
             return False
-        if self.require_valid is not None and node["is_valid"] is not self.require_valid:
+        if (
+            self.require_valid is not None
+            and node["is_valid"] is not self.require_valid
+        ):
             return False
-        if self.failure_class is not None and node["failure_class"] != self.failure_class:
+        if (
+            self.failure_class is not None
+            and node["failure_class"] != self.failure_class
+        ):
             return False
         fitness = node.get("fitness")
         needs_fitness = (
@@ -263,6 +273,59 @@ def logical_spec_hash(spec: QuerySpec) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+#: The three E2 candidate policies (experiments/gem_eg_e1_e2, query_contract.json).
+#: A policy changes WHICH candidates may enter the top-k and in what order, so it is
+#: part of the answer contract, not a physical knob.
+#:
+#:   vector_only   global eligible Node cosine top-k; no graph traversal.
+#:   graph_rerank  exact ANN entries -> deterministic typed multi-source BFS ->
+#:                 predicate -> reachable candidates ranked by query cosine.
+#:   graph_inject  same entries/reachable set -> BFS-order eligible bridges first,
+#:                 regardless of cosine -> global vector order fills remaining slots.
+CandidatePolicy = Literal["vector_only", "graph_rerank", "graph_inject"]
+CANDIDATE_POLICIES: tuple[CandidatePolicy, ...] = (
+    "vector_only",
+    "graph_rerank",
+    "graph_inject",
+)
+
+
+def candidate_policy_hash(spec: QuerySpec, policy: str) -> str:
+    """Identity of one E2 arm: the logical spec plus its candidate policy.
+
+    The three policies answer different questions over the same :class:`QuerySpec`,
+    so the spec hash alone would collide across arms.
+    """
+
+    if policy not in CANDIDATE_POLICIES:
+        raise ValueError(f"unknown candidate policy {policy!r}")
+    payload = {
+        "logical_spec_hash": logical_spec_hash(spec),
+        "candidate_policy": policy,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+@dataclass(frozen=True)
+class CandidatePolicyResult:
+    """One candidate policy's exact answer and the counts the E2 rows report."""
+
+    policy: str
+    #: ANN entries traversal starts from (empty for `vector_only`).
+    entries: tuple[str, ...]
+    #: Multi-source BFS order, entries excluded (empty for `vector_only`).
+    reached: tuple[str, ...]
+    #: The candidate pool the policy ranks: predicate-admitted reached vertices, or
+    #: every predicate-admitted Node for `vector_only`.
+    eligible: tuple[str, ...]
+    topk: tuple[str, ...]
+    #: Each returned node's own query cosine distance, in `topk` order.
+    distances: tuple[float, ...]
+    #: The `topk` members placed by BFS injection (non-empty only for `graph_inject`).
+    injected: tuple[str, ...] = ()
+
+
 @dataclass(frozen=True)
 class OracleResult:
     eligible: tuple[str, ...]
@@ -311,7 +374,10 @@ class Oracle:
             for uid in pool
             if uid not in pred.exclude_nodes
             and self._entry_task(uid) not in pred.exclude_tasks
-            and (pred.include_tasks is None or self._entry_task(uid) in pred.include_tasks)
+            and (
+                pred.include_tasks is None
+                or self._entry_task(uid) in pred.include_tasks
+            )
             and self._entry_session(uid) not in pred.exclude_sessions
         ]
         distances = self.corpus.cosine_distance(query, pool)
@@ -325,7 +391,10 @@ class Oracle:
         snapped: list[tuple[str, float]] = []
         group_distance: float | None = None
         for uid, distance in rows:
-            if group_distance is None or distance - group_distance > SEED_DISTANCE_TIE_EPS:
+            if (
+                group_distance is None
+                or distance - group_distance > SEED_DISTANCE_TIE_EPS
+            ):
                 group_distance = distance
             snapped.append((uid, group_distance))
         return snapped
@@ -382,7 +451,9 @@ class Oracle:
             reached = []
             seen: set[str] = set()
             for entry in entries:
-                for uid in self.corpus.traverse(entry, relation=spec.relation, hops=spec.hops):
+                for uid in self.corpus.traverse(
+                    entry, relation=spec.relation, hops=spec.hops
+                ):
                     distance = entry_distances.get(entry, 0.0)
                     previous = best_reaching_seed_distance.get(uid)
                     if previous is None or distance < previous:
@@ -394,7 +465,8 @@ class Oracle:
         eligible = [
             uid
             for uid in reached
-            if uid in self.corpus.nodes and spec.predicate.accepts(self.corpus.nodes[uid])
+            if uid in self.corpus.nodes
+            and spec.predicate.accepts(self.corpus.nodes[uid])
         ]
         eligible.sort()
 
@@ -425,11 +497,11 @@ class Oracle:
             ranked.sort(key=lambda pair: (pair[0], pair[1]))
         elif spec.rank_by == "reward":
             ranked = sorted(
-                (
-                    (float(distances[i]), eligible[i])
-                    for i in range(len(eligible))
+                ((float(distances[i]), eligible[i]) for i in range(len(eligible))),
+                key=lambda pair: (
+                    -(self.corpus.nodes[pair[1]]["fitness"] or float("-inf")),
+                    pair[1],
                 ),
-                key=lambda pair: (-(self.corpus.nodes[pair[1]]["fitness"] or float("-inf")), pair[1]),
             )
         else:
             # The approved physical-plan order.  The distance belongs to the ANN
@@ -454,6 +526,112 @@ class Oracle:
             entries=tuple(entries),
             traversed=len(reached),
         )
+
+    # -- E2 candidate policies -------------------------------------------
+
+    def run_candidate_policies(
+        self, spec: QuerySpec
+    ) -> dict[str, CandidatePolicyResult]:
+        """All three candidate policies over one spec, sharing the vector/graph work."""
+
+        query = self._query_vector(spec)
+        # One distance per node from ONE matmul over every node, so a candidate's
+        # distance (and hence every tie-break) is identical across the three arms;
+        # per-pool matmuls round float32 differently and can flip near-ties.
+        all_nodes = sorted(self.corpus.nodes)
+        distance_of: dict[str, float] = {}
+        if query is not None:
+            all_distances = self.corpus.cosine_distance(query, all_nodes)
+            distance_of = {
+                uid: float(d)
+                for uid, d in zip(all_nodes, all_distances)
+                if np.isfinite(d)
+            }
+        global_eligible = [
+            uid for uid in all_nodes if spec.predicate.accepts(self.corpus.nodes[uid])
+        ]
+        global_ranked = _rank_by_distance(distance_of, global_eligible)
+        entries = tuple(self.entries(spec))
+        reached = tuple(
+            self.corpus.traverse_many(
+                list(entries),
+                relation=spec.relation,
+                hops=spec.hops,
+                include_seeds=True,
+            )
+        )
+        # BFS order is kept: it IS graph_inject's injection order.
+        reach_eligible = tuple(
+            uid
+            for uid in reached
+            if uid in self.corpus.nodes
+            and spec.predicate.accepts(self.corpus.nodes[uid])
+        )
+        vector_top = global_ranked[: spec.k]
+        rerank_top = _rank_by_distance(distance_of, reach_eligible)[: spec.k]
+
+        # A vectorless candidate is unrankable and dropped (tjs_open `if (vnull)
+        # continue;`), so only bridges with a finite distance are injected.
+        injected = [uid for uid in reach_eligible if uid in distance_of][: spec.k]
+        inject_top = [(distance_of[uid], uid) for uid in injected]
+        taken = set(injected)
+        for dist, uid in global_ranked:
+            if len(inject_top) >= spec.k:
+                break
+            if uid not in taken:
+                taken.add(uid)
+                inject_top.append((dist, uid))
+
+        def result(
+            policy: str,
+            ranked: list[tuple[float, str]],
+            *,
+            graph: bool,
+            pool: tuple[str, ...],
+            inj: tuple[str, ...] = (),
+        ) -> CandidatePolicyResult:
+            return CandidatePolicyResult(
+                policy=policy,
+                entries=entries if graph else (),
+                reached=reached if graph else (),
+                eligible=pool,
+                topk=tuple(uid for _, uid in ranked),
+                distances=tuple(dist for dist, _ in ranked),
+                injected=inj,
+            )
+
+        return {
+            "vector_only": result(
+                "vector_only", vector_top, graph=False, pool=tuple(global_eligible)
+            ),
+            "graph_rerank": result(
+                "graph_rerank", rerank_top, graph=True, pool=reach_eligible
+            ),
+            "graph_inject": result(
+                "graph_inject",
+                inject_top,
+                graph=True,
+                pool=reach_eligible,
+                inj=tuple(injected),
+            ),
+        }
+
+    def run_candidate_policy(
+        self, spec: QuerySpec, policy: str
+    ) -> CandidatePolicyResult:
+        if policy not in CANDIDATE_POLICIES:
+            raise ValueError(f"unknown candidate policy {policy!r}")
+        return self.run_candidate_policies(spec)[policy]
+
+
+def _rank_by_distance(
+    distance_of: dict[str, float], uids: Iterable[str]
+) -> list[tuple[float, str]]:
+    """(cosine distance, uid) ascending; vectorless candidates (absent) dropped."""
+
+    ranked = [(distance_of[uid], uid) for uid in uids if uid in distance_of]
+    ranked.sort(key=lambda pair: (pair[0], pair[1]))
+    return ranked
 
 
 def recall_at_k(observed: list[str], expected: tuple[str, ...]) -> float:

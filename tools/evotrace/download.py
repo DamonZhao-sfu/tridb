@@ -107,7 +107,9 @@ def discover_runs(root: Path) -> list[RunDir]:
         if len(rel.parts) == 2:
             runs.append(RunDir(backend=rel.parts[0], group=None, name=rel.parts[1]))
         elif len(rel.parts) == 3:
-            runs.append(RunDir(backend=rel.parts[0], group=rel.parts[1], name=rel.parts[2]))
+            runs.append(
+                RunDir(backend=rel.parts[0], group=rel.parts[1], name=rel.parts[2])
+            )
         else:
             # Unexpected nesting depth — surface it rather than guess a backend.
             print(f"  ! unexpected run depth, skipped: {rel}", file=sys.stderr)
@@ -260,7 +262,9 @@ def verify(root: Path, manifest_path: Path) -> int:
     print(f"runs found    : {len(runs)}")
     print(f"core-ready    : {len(runs) - len(incomplete)}/{len(runs)}")
     if incomplete:
-        print(f"incomplete    : {incomplete[:10]}{' ...' if len(incomplete) > 10 else ''}")
+        print(
+            f"incomplete    : {incomplete[:10]}{' ...' if len(incomplete) > 10 else ''}"
+        )
     if mismatched:
         print(f"PROBLEMS ({len(mismatched)}):")
         for line in mismatched[:20]:
@@ -273,7 +277,9 @@ def verify(root: Path, manifest_path: Path) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
-    parser.add_argument("--verify", action="store_true", help="re-hash against the manifest")
+    parser.add_argument(
+        "--verify", action="store_true", help="re-hash against the manifest"
+    )
     parser.add_argument(
         "--manifest-only",
         action="store_true",

@@ -36,7 +36,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
-from bench.agent_memory.gem_eg.oracle import QuerySpec
+from bench.agent_memory.gem_eg.oracle import QuerySpec, logical_spec_hash
 from bench.agent_memory.gem_eg.store import EgStore, vec_literal
 
 #: Query-shape -> the native edge type its stage-2 traversal walks.
@@ -117,6 +117,29 @@ class EngineResult:
     raw_reached: int = 0
     distinct_reached: int = 0
     dedup_hits: int = 0
+    # -- native fused plans (run_native_*) ---------------------------------
+    #: The native branch this result came from: `graph_expand`, `vector_only` or
+    #: `source_anchored`. Set by the caller-facing method, i.e. what was ASKED for.
+    native_fused_plan: str | None = None
+    #: The `tjs.seedless_plan` value the call set for its transaction.
+    seedless_plan_requested: str | None = None
+    #: Whether `tjs.seedless_plan` is a setting the loaded tjs_pg actually registered
+    #: (pg_settings), read after the call. False means the value was a placeholder GUC
+    #: and the operator ignored it.
+    seedless_plan_guc_registered: bool | None = None
+    #: The operator's own receipt of the schedule it executed (`tjs_open_plan()`), or
+    #: None when the loaded tjs_pg has no such receipt. Never filled from the request.
+    operator_plan: str | None = None
+    source_anchor_uid: str | None = None
+    source_anchor_vid: int | None = None
+    #: Optional operator receipts; None when the loaded tjs_pg does not expose them.
+    seed_count: int | None = None
+    seed_hash: str | None = None
+    graph_reached: int | None = None
+    relational_examined: int | None = None
+    relational_passed: int | None = None
+    bridges_injected: int | None = None
+    budget_capped: bool | None = None
 
 
 class W1Engine:
@@ -133,6 +156,7 @@ class W1Engine:
         self._uid: dict[int, str] = {}
         self._vectors: dict[str, str] = {}
         self._physical_ready: set[str] = set()
+        self._receipt_functions: frozenset[str] | None = None
 
     # -- identity -------------------------------------------------------
 
@@ -161,21 +185,28 @@ class W1Engine:
     # -- session settings ------------------------------------------------
 
     @contextmanager
-    def settings(self, knobs: Knobs) -> Iterator[None]:
+    def settings(
+        self, knobs: Knobs, seedless_plan: str | None = None
+    ) -> Iterator[None]:
         """Apply the operator knobs for one measured query, then restore them.
 
         LOCAL so a failed query cannot leak a setting into the next one and quietly
-        move a whole sweep's operating point.
+        move a whole sweep's operating point. ``seedless_plan`` sets
+        ``tjs.seedless_plan`` (ADR-0023) for the same transaction; omitted, the
+        setting is left untouched.
         """
         self.conn.execute("BEGIN")
         # set_config(..., is_local => true) rather than `SET LOCAL`: the latter takes no
         # bind parameters, so a swept value would have to be interpolated into SQL.
-        for name, value in (
+        values: list[tuple[str, Any]] = [
             ("hnsw.iterative_scan", knobs.iterative_scan),
             ("hnsw.ef_search", knobs.ef_search),
             ("tjs.graph_work_budget", knobs.graph_work_budget),
             ("tjs.graph_scoring", knobs.graph_scoring),
-        ):
+        ]
+        if seedless_plan is not None:
+            values.append(("tjs.seedless_plan", seedless_plan))
+        for name, value in values:
             self.conn.execute("SELECT set_config(%s, %s, true)", (name, str(value)))
         try:
             yield
@@ -184,7 +215,9 @@ class W1Engine:
 
     # -- the two stages ---------------------------------------------------
 
-    def _stream(self, sql: str, params: tuple[Any, ...], limit: int) -> tuple[list[int], float | None]:
+    def _stream(
+        self, sql: str, params: tuple[Any, ...], limit: int
+    ) -> tuple[list[int], float | None]:
         """Pull a tjs_open SRF through a server-side cursor, timing the FIRST row.
 
         A plain execute() would materialise the whole result before returning, which is
@@ -205,7 +238,9 @@ class W1Engine:
                     break
         return out, first
 
-    def stage1_entries(self, spec: QuerySpec, knobs: Knobs, query_vec: str) -> list[int]:
+    def stage1_entries(
+        self, spec: QuerySpec, knobs: Knobs, query_vec: str
+    ) -> list[int]:
         """Seedless ANN: the vector-seeded half of "vector-seeded graph retrieval"."""
         entry_filter = self._entry_filter(spec)
         sql = (
@@ -345,9 +380,11 @@ class W1Engine:
                     (pool, spec.k),
                 ).fetchall()
                 ordered = [int(r[0]) for r in rows]
-                result.first_row_ms = result.stage1_ms + result.stage2_ms + (
-                    time.perf_counter() - t2
-                ) * 1000.0
+                result.first_row_ms = (
+                    result.stage1_ms
+                    + result.stage2_ms
+                    + (time.perf_counter() - t2) * 1000.0
+                )
             elif len(entry_vids) <= 1:
                 ordered = pool[: spec.k]
                 if result.first_row_ms is None:
@@ -363,14 +400,219 @@ class W1Engine:
                 ordered = [int(r[0]) for r in rows]
                 # A globally ranked first row cannot exist before the merge, so this is
                 # the honest number. `first_candidate_ms` still shows when streaming began.
-                result.first_row_ms = result.stage1_ms + result.stage2_ms + (
-                    time.perf_counter() - t2
-                ) * 1000.0
+                result.first_row_ms = (
+                    result.stage1_ms
+                    + result.stage2_ms
+                    + (time.perf_counter() - t2) * 1000.0
+                )
             result.merge_ms = (time.perf_counter() - t2) * 1000.0
             result.ids = [u for u in (self.uid(v) for v in ordered) if u]
 
         result.total_ms = (time.perf_counter() - started) * 1000.0
         return result
+
+    # -- native fused plans (one operator call each) ------------------------
+    #
+    # ADR-0022/0023: the formal fused-only experiment issues exactly ONE production
+    # operator call per retrieval and never routes through the Python physical
+    # executor. Each method below is that one call plus the operator's receipts.
+    #
+    # DRIFT DISCLOSURE (ADR-0023). The in-tree src/tjs_pg does NOT register
+    # `tjs.seedless_plan`; the schedule switch lives only in the out-of-tree runtime
+    # installed by bench/agent_memory/evomembench/install_local_tjs_runtime.py. With
+    # the in-tree extension the GUC is an unregistered placeholder, so `graph_expand`
+    # and `vector_stream` execute the SAME in-tree seedless body. The result therefore
+    # records the schedule REQUESTED (`seedless_plan_requested`), whether the setting
+    # is registered (`seedless_plan_guc_registered`), and the operator's own plan
+    # receipt (`operator_plan`, None when the extension has no receipt) -- never a
+    # claim that a schedule ran.
+
+    SEEDLESS_PLANS = ("vector_stream", "graph_expand")
+
+    def _native_query_vec(self, spec: QuerySpec) -> str | None:
+        if spec.query_vector is not None:
+            return vec_literal(spec.query_vector)
+        return self._vectors.get(spec.seed_uid)
+
+    def _native_finish(
+        self,
+        result: EngineResult,
+        spec: QuerySpec,
+        vids: list[int],
+        first: float | None,
+        started: float,
+    ) -> EngineResult:
+        """Receipts (same transaction as the call), then uid mapping and timings."""
+        self._collect_counters(result)
+        self._collect_native_receipts(result)
+        result.ids = [u for u in (self.uid(v) for v in vids) if u]
+        result.first_candidate_ms = first
+        result.first_row_ms = first
+        result.logical_spec_hash = logical_spec_hash(spec)
+        result.total_ms = (time.perf_counter() - started) * 1000.0
+        return result
+
+    def _collect_native_receipts(self, result: EngineResult) -> None:
+        """Optional operator receipts, read only if the loaded tjs_pg defines them.
+
+        Probed by name rather than assumed: the in-tree extension exposes only the
+        core counters, the out-of-tree runtime adds the plan / seed receipts. A
+        missing receipt stays None so it can never be mistaken for a measured zero.
+        """
+        receipts = (
+            ("tjs_open_plan", "operator_plan", str),
+            ("tjs_open_seed_count", "seed_count", int),
+            ("tjs_open_seed_hash", "seed_hash", str),
+            ("tjs_open_graph_reached", "graph_reached", int),
+            ("tjs_open_relational_examined", "relational_examined", int),
+            ("tjs_open_relational_passed", "relational_passed", int),
+            ("tjs_open_bridges_injected", "bridges_injected", int),
+            ("tjs_open_budget_capped", "budget_capped", bool),
+        )
+        if self._receipt_functions is None:
+            rows = self.conn.execute(
+                "SELECT proname FROM pg_proc WHERE proname = ANY(%s) AND pronargs = 0",
+                ([name for name, _, _ in receipts],),
+            ).fetchall()
+            self._receipt_functions = frozenset(str(r[0]) for r in rows)
+        available = self._receipt_functions
+        for function, attribute, cast in receipts:
+            if function not in available:
+                continue
+            row = self.conn.execute(f"SELECT {function}()").fetchone()
+            value = row[0] if row is not None else None
+            setattr(result, attribute, None if value is None else cast(value))
+        # Read AFTER the call: custom GUCs are registered by _PG_init, so a backend
+        # that has not loaded tjs_pg yet would report none of them.
+        row = self.conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM pg_settings WHERE name = 'tjs.seedless_plan')"
+        ).fetchone()
+        result.seedless_plan_guc_registered = bool(row[0]) if row else False
+
+    def run_native_seedless(
+        self, spec: QuerySpec, knobs: Knobs, native_plan: str
+    ) -> EngineResult:
+        """Seedless native branch: src NULL, m_seeds ANN seeds, bounded native reach.
+
+        One operator call. ``native_plan`` is written to ``tjs.seedless_plan`` for the
+        call's transaction. See the drift disclosure above: with the in-tree tjs_pg
+        both schedules run the same body, and the result says so via
+        ``seedless_plan_guc_registered`` / ``operator_plan``.
+        """
+        if native_plan not in self.SEEDLESS_PLANS:
+            raise ValueError(f"unknown seedless plan {native_plan!r}")
+        if spec.ann_m_seeds <= 0:
+            raise ValueError("the seedless graph branch needs ann_m_seeds > 0")
+        result = EngineResult(
+            physical_plan=None,
+            native_fused_plan=native_plan,
+            seedless_plan_requested=native_plan,
+        )
+        query_vec = self._native_query_vec(spec)
+        if query_vec is None:
+            result.termination_reason = "no_seed_vector"
+            return result
+        edge_type = self.store.edge_type_id(RELATION_EDGE_TYPE[spec.relation])
+        sql = (
+            f"SELECT tjs_open('{self.TABLE}'::regclass, %s, %s, %s, %s, '{self.ID_COL}',"
+            " %s, %s::vector, NULL, %s)"
+        )
+        started = time.perf_counter()
+        with self.settings(knobs, seedless_plan=native_plan):
+            vids, first = self._stream(
+                sql,
+                (
+                    spec.k,
+                    knobs.term_cond,
+                    spec.ann_m_seeds,
+                    spec.hops,
+                    spec.predicate.to_sql(),
+                    query_vec,
+                    edge_type,
+                ),
+                limit=spec.k,
+            )
+            result.calls = 1
+            return self._native_finish(result, spec, vids, first, started)
+
+    def run_native_vector_only(self, spec: QuerySpec, knobs: Knobs) -> EngineResult:
+        """Vector-only native branch: src NULL, no seeds, no graph leg.
+
+        One operator call with ``m_seeds = 0``, so the relational predicate is applied
+        to the vector stream and the graph is never touched. ``tjs.seedless_plan`` is
+        pinned to its default, which ADR-0023 scopes to ``m_seeds > 0`` anyway.
+        """
+        result = EngineResult(
+            physical_plan=None,
+            native_fused_plan="vector_only",
+            seedless_plan_requested="vector_stream",
+        )
+        query_vec = self._native_query_vec(spec)
+        if query_vec is None:
+            result.termination_reason = "no_seed_vector"
+            return result
+        sql = (
+            f"SELECT tjs_open('{self.TABLE}'::regclass, %s, %s, 0, 0, '{self.ID_COL}',"
+            " %s, %s::vector, NULL, 0)"
+        )
+        started = time.perf_counter()
+        with self.settings(knobs, seedless_plan="vector_stream"):
+            vids, first = self._stream(
+                sql,
+                (spec.k, knobs.term_cond, spec.predicate.to_sql(), query_vec),
+                limit=spec.k,
+            )
+            result.calls = 1
+            return self._native_finish(result, spec, vids, first, started)
+
+    def run_native_source_anchored(
+        self, spec: QuerySpec, knobs: Knobs, source_anchor_uid: str
+    ) -> EngineResult:
+        """Anchored native branch: src = one caller-supplied persisted vertex.
+
+        One operator call: bounded typed traversal from the anchor, the predicate
+        pushed down, ranked by distance to the query vector. No ANN seeds, so
+        ``tjs.seedless_plan`` does not apply and is not set.
+        """
+        result = EngineResult(
+            physical_plan=None,
+            native_fused_plan="source_anchored",
+            source_anchor_uid=source_anchor_uid,
+        )
+        query_vec = self._native_query_vec(spec)
+        if query_vec is None:
+            result.termination_reason = "no_seed_vector"
+            return result
+        source_vid = self.vid(source_anchor_uid)
+        if source_vid is None:
+            # An anchor outside the loaded scope is a wiring defect, not an empty
+            # answer; scoring it as one would turn the arm into `nocontext`.
+            raise RuntimeError(
+                f"source anchor {source_anchor_uid!r} is not a vertex of {self.scope_id}"
+            )
+        result.source_anchor_vid = source_vid
+        edge_type = self.store.edge_type_id(RELATION_EDGE_TYPE[spec.relation])
+        sql = (
+            f"SELECT tjs_open('{self.TABLE}'::regclass, %s, %s, 0, %s, '{self.ID_COL}',"
+            " %s, %s::vector, %s, %s)"
+        )
+        started = time.perf_counter()
+        with self.settings(knobs):
+            vids, first = self._stream(
+                sql,
+                (
+                    spec.k,
+                    knobs.term_cond,
+                    spec.hops,
+                    spec.predicate.to_sql(),
+                    query_vec,
+                    source_vid,
+                    edge_type,
+                ),
+                limit=spec.k,
+            )
+            result.calls = 1
+            return self._native_finish(result, spec, vids, first, started)
 
     def _run_ablation(
         self, spec: QuerySpec, knobs: Knobs, query_vec: str, entry_vids: list[int]
@@ -439,12 +681,14 @@ class W1Engine:
         clauses = [f"kind = '{spec.ann_entry_kind}'"]
         if spec.predicate.exclude_sessions:
             joined = ", ".join(
-                "'" + s.replace("'", "''") + "'" for s in sorted(spec.predicate.exclude_sessions)
+                "'" + s.replace("'", "''") + "'"
+                for s in sorted(spec.predicate.exclude_sessions)
             )
             clauses.append(f"(session_uid IS NULL OR session_uid NOT IN ({joined}))")
         if spec.predicate.exclude_tasks:
             joined = ", ".join(
-                "'" + t.replace("'", "''") + "'" for t in sorted(spec.predicate.exclude_tasks)
+                "'" + t.replace("'", "''") + "'"
+                for t in sorted(spec.predicate.exclude_tasks)
             )
             clauses.append(f"(task_uid IS NULL OR task_uid NOT IN ({joined}))")
         if spec.predicate.include_tasks is not None:

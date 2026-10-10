@@ -91,6 +91,20 @@ CREATE INDEX IF NOT EXISTS gem_field_value_hist_idx
     ON gem_field_value (unit_id, field, valid_from DESC);
 CREATE INDEX IF NOT EXISTS gem_unit_scope_idx  ON gem_unit (scope_id);
 CREATE INDEX IF NOT EXISTS gem_unit_active_idx ON gem_unit (scope_id, state);
+-- Experience eligibility (EvoMemBench cross-episode): "active experiences of
+-- this scope strictly before ordinal t, newest first" is the anchor/FIFO probe
+-- and the metadata filter pushed into every retrieval.  Partial expression
+-- indexes so the cutoff predicate is an index range, not a scope-wide scan.
+CREATE INDEX IF NOT EXISTS gem_unit_experience_cutoff_idx
+    ON gem_unit (scope_id, ((metadata->>'experience_ordinal')::integer) DESC, id DESC)
+    WHERE state = 'active' AND metadata->>'node_kind' = 'experience';
+-- Protocol-scoped eligibility: CrossEp-Tool admits experiences only under the
+-- same tool schema and source phase.
+CREATE INDEX IF NOT EXISTS gem_unit_experience_protocol_idx
+    ON gem_unit (scope_id, (metadata->>'tool_schema_hash'),
+                 (metadata->>'source_phase'),
+                 ((metadata->>'experience_ordinal')::integer))
+    WHERE state = 'active' AND metadata->>'node_kind' = 'experience';
 -- The routing vector. Cosine, matching the rest of bench/agent_memory; the MCP
 -- server's l2 index is the odd one out and is migrated by the same change.
 CREATE INDEX IF NOT EXISTS gem_unit_hnsw

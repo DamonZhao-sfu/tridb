@@ -198,7 +198,9 @@ class GroundTruth:
 
     def grades(self, dp: DecisionPoint, candidates: list[str]) -> dict[str, int]:
         return {
-            uid: self.grade(dp, uid, same_task=self.corpus.nodes[uid]["task_uid"] == dp.task_uid)
+            uid: self.grade(
+                dp, uid, same_task=self.corpus.nodes[uid]["task_uid"] == dp.task_uid
+            )
             for uid in candidates
         }
 
@@ -218,7 +220,9 @@ class GroundTruth:
             node["fitness"]
             for session in self.corpus.task_sessions.get(task_uid, [])
             if session != exclude_session
-            for node in (self.corpus.nodes[u] for u in self.corpus.session_nodes.get(session, []))
+            for node in (
+                self.corpus.nodes[u] for u in self.corpus.session_nodes.get(session, [])
+            )
             if node["is_valid"]
             and node["fitness"] is not None
             and not self.is_dead_end(node["node_uid"])
@@ -254,7 +258,11 @@ class GroundTruth:
         n_marginal = max(0, len(rewards) - n_best - n_improve)
 
         grades: list[int] = []
-        for grade, count in ((GRADE_BEST, n_best), (GRADE_IMPROVES, n_improve), (GRADE_MARGINAL, n_marginal)):
+        for grade, count in (
+            (GRADE_BEST, n_best),
+            (GRADE_IMPROVES, n_improve),
+            (GRADE_MARGINAL, n_marginal),
+        ):
             take = min(count, k - len(grades))
             if take > 0:
                 grades.extend([grade] * take)
@@ -330,7 +338,9 @@ class GroundTruth:
             if node["failure_class"] != "execution":
                 continue
             repairs = [
-                c for c in self.corpus.siblings(uid) if self.corpus.nodes[c]["failure_class"] == "clean"
+                c
+                for c in self.corpus.siblings(uid)
+                if self.corpus.nodes[c]["failure_class"] == "clean"
             ] + [
                 c
                 for c in self.corpus.children.get(uid, [])

@@ -1,4 +1,4 @@
--- tridb_tjs 0.2.0 — the fused tri-modal operator on stock PostgreSQL (ADR-0019).
+-- tridb_tjs 0.3.0 — the fused tri-modal operator on stock PostgreSQL (ADR-0019).
 \echo Use "CREATE EXTENSION tjs_pg" to load this file. \quit
 
 -- Versioning convention (advisor plan 100): from 0.2.0 on, released surface changes ship as

@@ -120,18 +120,32 @@ class Loader:
         access method traverses outgoing edges only.
         """
         if self.store.link(
-            src, dst, relation=relation, edge_type=specific, provenance=provenance,
+            src,
+            dst,
+            relation=relation,
+            edge_type=specific,
+            provenance=provenance,
             dataset_revision=self.revision,
         ):
             self.receipt.add(f"edge:{relation}")
         if self.store.link(
-            src, dst, relation=relation, edge_type="eg_hier", rollup_of=specific,
-            provenance=provenance, dataset_revision=self.revision,
+            src,
+            dst,
+            relation=relation,
+            edge_type="eg_hier",
+            rollup_of=specific,
+            provenance=provenance,
+            dataset_revision=self.revision,
         ):
             self.receipt.add("edge:rollup")
         if self.store.link(
-            dst, src, relation=f"{relation}_inv", edge_type="eg_hier_inv",
-            derived_inverse=True, rollup_of=specific, provenance=provenance,
+            dst,
+            src,
+            relation=f"{relation}_inv",
+            edge_type="eg_hier_inv",
+            derived_inverse=True,
+            rollup_of=specific,
+            provenance=provenance,
             dataset_revision=self.revision,
         ):
             self.receipt.add("edge:inverse")
@@ -177,7 +191,8 @@ class Loader:
                     # No canonical problem statement ships in the core files. This is a
                     # stand-in, and `specification_complete=false` is what forbids
                     # calling the ANN over it a task-DESCRIPTION ANN.
-                    task.get("specification") or f"{task['domain']} task {task['task_key']}",
+                    task.get("specification")
+                    or f"{task['domain']} task {task['task_key']}",
                     bool(task.get("specification_complete", False)),
                     task.get("specification_source", "run_name_only"),
                     "combined_score",
@@ -239,12 +254,22 @@ class Loader:
         return None, None
 
     def load_sessions(self) -> None:
-        sessions = {s["session_uid"]: s for s in read_jsonl(self.normalized / "sessions.jsonl")}
-        nodes_by_session = _group(read_jsonl(self.normalized / "nodes.jsonl"), "session_uid")
-        lineage = _group(read_jsonl(self.normalized / "lineage_edges.jsonl"), "session_uid")
-        context = _group(read_jsonl(self.normalized / "context_edges.jsonl"), "session_uid")
+        sessions = {
+            s["session_uid"]: s for s in read_jsonl(self.normalized / "sessions.jsonl")
+        }
+        nodes_by_session = _group(
+            read_jsonl(self.normalized / "nodes.jsonl"), "session_uid"
+        )
+        lineage = _group(
+            read_jsonl(self.normalized / "lineage_edges.jsonl"), "session_uid"
+        )
+        context = _group(
+            read_jsonl(self.normalized / "context_edges.jsonl"), "session_uid"
+        )
         prompts = _group(read_jsonl(self.normalized / "prompts.jsonl"), "session_uid")
-        events = _group(read_jsonl(self.normalized / "state_events.jsonl"), "session_uid")
+        events = _group(
+            read_jsonl(self.normalized / "state_events.jsonl"), "session_uid"
+        )
         calls = _group(read_jsonl(self.normalized / "llm_calls.jsonl"), "session_uid")
 
         for uid, session in sessions.items():
@@ -282,7 +307,9 @@ class Loader:
             "DELETE FROM gem_eg_llm_call WHERE scope_id=%s AND session_uid=%s",
             (self.scope_id, uid),
         )
-        wanted = [uid] + [n["node_uid"] for n in nodes] + [p["prompt_uid"] for p in prompts]
+        wanted = (
+            [uid] + [n["node_uid"] for n in nodes] + [p["prompt_uid"] for p in prompts]
+        )
         mapping = self._alloc(wanted)
         session_vid = mapping[uid]
 
@@ -361,33 +388,51 @@ class Loader:
             )
 
         for edge in lineage:
-            src, dst = mapping.get(edge["src_node_uid"]), mapping.get(edge["dst_node_uid"])
+            src, dst = (
+                mapping.get(edge["src_node_uid"]),
+                mapping.get(edge["dst_node_uid"]),
+            )
             if src is None or dst is None:
                 self.receipt.reject("lineage_endpoint_missing")
                 continue
             if self.store.link(
-                src, dst, relation="has_child", edge_type="eg_lineage",
-                provenance=edge["provenance"], source_row=edge.get("row_offset"),
+                src,
+                dst,
+                relation="has_child",
+                edge_type="eg_lineage",
+                provenance=edge["provenance"],
+                source_row=edge.get("row_offset"),
                 dataset_revision=self.revision,
             ):
                 self.receipt.add("edge:lineage")
             # Ancestors are only reachable through this: the AM traverses out-edges only.
             if self.store.link(
-                dst, src, relation="child_of", edge_type="eg_child_of",
-                derived_inverse=True, provenance=edge["provenance"],
+                dst,
+                src,
+                relation="child_of",
+                edge_type="eg_child_of",
+                derived_inverse=True,
+                provenance=edge["provenance"],
                 dataset_revision=self.revision,
             ):
                 self.receipt.add("edge:lineage_inverse")
 
         for edge in context:
-            src, dst = mapping.get(edge["src_node_uid"]), mapping.get(edge["dst_node_uid"])
+            src, dst = (
+                mapping.get(edge["src_node_uid"]),
+                mapping.get(edge["dst_node_uid"]),
+            )
             if src is None or dst is None:
                 self.receipt.reject("context_endpoint_missing")
                 continue
             # Its own type, never folded into lineage: an inspiration is not a parent.
             if self.store.link(
-                src, dst, relation="context_for", edge_type="eg_context",
-                provenance=edge["provenance"], source_row=edge.get("row_offset"),
+                src,
+                dst,
+                relation="context_for",
+                edge_type="eg_context",
+                provenance=edge["provenance"],
+                source_row=edge.get("row_offset"),
                 dataset_revision=self.revision,
             ):
                 self.receipt.add("edge:context")
@@ -556,8 +601,12 @@ class Loader:
         )
         self.receipt.add("prompt_processed")
         if node_vid is not None and self.store.link(
-            node_vid, vid, relation="has_prompt", edge_type="eg_has_prompt",
-            provenance="programs.jsonl:prompts_sha256", dataset_revision=self.revision,
+            node_vid,
+            vid,
+            relation="has_prompt",
+            edge_type="eg_has_prompt",
+            provenance="programs.jsonl:prompts_sha256",
+            dataset_revision=self.revision,
         ):
             self.receipt.add("edge:has_prompt")
 
@@ -586,13 +635,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dim", type=int, default=DEFAULT_DIM)
     parser.add_argument("--normalized", type=Path, default=DEFAULT_NORMALIZED)
     parser.add_argument("--raw", type=Path, default=DEFAULT_RAW)
-    parser.add_argument("--scope", default=None, help="default: evotrace:<revision[:8]>")
+    parser.add_argument(
+        "--scope", default=None, help="default: evotrace:<revision[:8]>"
+    )
     parser.add_argument("--counts-only", action="store_true")
     args = parser.parse_args(argv)
 
     report_path = args.normalized / "integrity_report.json"
     if not report_path.is_file():
-        print(f"no integrity report at {report_path}; run the normalizer first", file=sys.stderr)
+        print(
+            f"no integrity report at {report_path}; run the normalizer first",
+            file=sys.stderr,
+        )
         return 2
     report = json.loads(report_path.read_text())
     revision = report["revision"]

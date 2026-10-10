@@ -27,8 +27,10 @@
 
 ### Notes & Caveats
 - Planner C built and tested on stock PG16 only; PG13.4 fork / GX10 unbuilt here.
-- `make test` / `make lint` still fail on pre-existing issues (6 collection errors,
-  untracked result trees); new code is lint-clean and tested.
+- P−1: `make test` (2039 passed, 0 failed) and `make lint` (clean) now pass. Result trees,
+  archives and vendored code are excluded from lint; graph_store_am bumped to 0.3.0
+  (no SQL change) to match tjs_pg for release coherence; `candidate_policy_hash` format
+  cannot reproduce hashes stored in old `results/gem_eg_e1_e2_v0.1.0` rows.
 - `test_gem_live.py::TestC6Write::test_the_c6_write_is_HOT` is flaky (pre-existing).
 
 ## [0.7.1] - 2026-09-02

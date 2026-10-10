@@ -40,18 +40,23 @@ def sample_lengths(path: Path, n: int, seed: int) -> list[tuple[int, int]]:
     return rng.sample(pairs, min(n, len(pairs)))
 
 
-def one(endpoint: str, model: str, idx: int, prompt_tok: int, out_tok: int,
-        cap: int) -> dict[str, object]:
+def one(
+    endpoint: str, model: str, idx: int, prompt_tok: int, out_tok: int, cap: int
+) -> dict[str, object]:
     # ~4 chars/token for filler; the leading index defeats prefix caching.
-    body = json.dumps({
-        "model": model,
-        "prompt": f"req{idx} " + ("word " * max(1, prompt_tok // 2)),
-        "max_tokens": min(out_tok, cap),
-        "temperature": 0.0,
-        "stream": False,
-    }).encode()
+    body = json.dumps(
+        {
+            "model": model,
+            "prompt": f"req{idx} " + ("word " * max(1, prompt_tok // 2)),
+            "max_tokens": min(out_tok, cap),
+            "temperature": 0.0,
+            "stream": False,
+        }
+    ).encode()
     req = urllib.request.Request(
-        f"{endpoint}/completions", data=body, headers={"Content-Type": "application/json"}
+        f"{endpoint}/completions",
+        data=body,
+        headers={"Content-Type": "application/json"},
     )
     start = time.perf_counter()
     try:
@@ -75,9 +80,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--calls", type=Path, default=DEFAULT_CALLS)
     ap.add_argument("-n", type=int, default=50)
     ap.add_argument("--concurrency", type=int, default=8)
-    ap.add_argument("--max-out", type=int, default=2048,
-                    help="cap on completion tokens; the corpus p99 is 16,384 and "
-                         "replaying that in full costs more than the measurement is worth")
+    ap.add_argument(
+        "--max-out",
+        type=int,
+        default=2048,
+        help="cap on completion tokens; the corpus p99 is 16,384 and "
+        "replaying that in full costs more than the measurement is worth",
+    )
     ap.add_argument("--seed", type=int, default=20260825)
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args(argv)
@@ -85,16 +94,24 @@ def main(argv: list[str] | None = None) -> int:
     lengths = sample_lengths(args.calls, args.n, args.seed)
     ptoks = sorted(p for p, _ in lengths)
     print(f"sampled {len(lengths)} real (prompt, completion) pairs")
-    print(f"  prompt_tokens  p50={ptoks[len(ptoks)//2]:,}  max={ptoks[-1]:,}")
+    print(f"  prompt_tokens  p50={ptoks[len(ptoks) // 2]:,}  max={ptoks[-1]:,}")
     print(f"  concurrency={args.concurrency}  max_out={args.max_out}")
 
     wall = time.perf_counter()
     with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-        results = list(pool.map(
-            lambda item: one(args.endpoint, args.model, item[0], item[1][0], item[1][1],
-                             args.max_out),
-            enumerate(lengths),
-        ))
+        results = list(
+            pool.map(
+                lambda item: one(
+                    args.endpoint,
+                    args.model,
+                    item[0],
+                    item[1][0],
+                    item[1][1],
+                    args.max_out,
+                ),
+                enumerate(lengths),
+            )
+        )
     wall = time.perf_counter() - wall
 
     ok = [r for r in results if r["ok"]]
@@ -126,7 +143,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n  first failure: {failed[0]}")
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(json.dumps({"summary": summary, "results": results}, indent=2))
+        args.out.write_text(
+            json.dumps({"summary": summary, "results": results}, indent=2)
+        )
         print(f"\nreceipt: {args.out}")
     return 0
 

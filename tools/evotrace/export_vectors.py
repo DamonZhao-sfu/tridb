@@ -35,7 +35,9 @@ def export(store: EgStore, scope_id: str, out: Path) -> dict[str, object]:
         (scope_id,),
     ).fetchall()
     if not rows:
-        raise SystemExit(f"no embeddings in scope {scope_id!r}; run tools/evotrace/embed.py first")
+        raise SystemExit(
+            f"no embeddings in scope {scope_id!r}; run tools/evotrace/embed.py first"
+        )
 
     uids = [r[0] for r in rows]
     kinds = [r[1] for r in rows]

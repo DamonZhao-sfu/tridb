@@ -36,7 +36,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
-from bench.agent_memory.gem_eg.store import DEFAULT_DIM, DEFAULT_DSN, EgStore, vec_literal
+from bench.agent_memory.gem_eg.store import (
+    DEFAULT_DIM,
+    DEFAULT_DSN,
+    EgStore,
+    vec_literal,
+)
 
 DEFAULT_ENDPOINT = "http://127.0.0.1:8001/v1/embeddings"
 DEFAULT_MODEL = "Qwen/Qwen3-Embedding-0.6B"
@@ -87,7 +92,11 @@ TRACKS = {"task": TASK_TRACK, "node": NODE_TRACK}
 
 def task_text(row: Sequence[Any]) -> str:
     _, task_uid, domain, task_key, spec, metric, environment = row
-    env = environment if isinstance(environment, dict) else json.loads(environment or "{}")
+    env = (
+        environment
+        if isinstance(environment, dict)
+        else json.loads(environment or "{}")
+    )
     languages = ", ".join(env.get("languages") or []) or "unspecified"
     return (
         f"Task: {task_key}\n"
@@ -222,8 +231,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
-    parser.add_argument("--refresh", action="store_true", help="re-embed rows that already have one")
-    parser.add_argument("--limit", type=int, default=None, help="smoke-test cap per track")
+    parser.add_argument(
+        "--refresh", action="store_true", help="re-embed rows that already have one"
+    )
+    parser.add_argument(
+        "--limit", type=int, default=None, help="smoke-test cap per track"
+    )
     args = parser.parse_args(argv)
 
     names = sorted(TRACKS) if args.track == "all" else [args.track]

@@ -31,7 +31,7 @@
 
 ---
 
-**Current release: v0.2.0** — [release notes](docs/releases/v0.2.0.md) · [install guide](docs/INSTALL_stock_pg.md) · extensions install on **stock PostgreSQL 16/17 + pgvector**, no fork.
+**Current release: v0.3.0** — [release notes](docs/releases/v0.3.0.md) · [install guide](docs/INSTALL_stock_pg.md) · extensions install on **stock PostgreSQL 16/17 + pgvector**, no fork.
 
 <p align="center">
   <img src="assets/tridb-race.gif" alt="Live race: the same fused query over 200k Wikipedia articles — TriDB in one Postgres process, median 2.2 ms, vs Milvus+Neo4j+Postgres app-side, median 44.3 ms; 19.7x faster with identical answers" width="820">

@@ -105,7 +105,9 @@ def parse_run_name(name: str) -> RunName:
             reverse=True,
         )
         if not matched:
-            raise RunNameError(f"no registered Task matches stem {stem!r} (run {name!r})")
+            raise RunNameError(
+                f"no registered Task matches stem {stem!r} (run {name!r})"
+            )
         raw_key = matched[0]
         domain = "math"
         task_key = _TASK_ALIASES.get(raw_key, raw_key)

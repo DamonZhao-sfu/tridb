@@ -69,8 +69,7 @@ def nested(value: Any, *keys: str) -> Any:
 
 def selected_rows(source: Path) -> list[dict[str, Any]]:
     rows = [
-        receipt_row(path, source)
-        for path in sorted(source.glob("**/run_receipt.json"))
+        receipt_row(path, source) for path in sorted(source.glob("**/run_receipt.json"))
     ]
     return [row for row in rows if row["selected"]]
 
@@ -87,9 +86,7 @@ def metric(row: dict[str, Any], name: str) -> float | None:
         value = summary.get("success_rate")
         return None if value is None else float(value) * 100.0
     if name == "completion_qps":
-        value = summary.get("completion_throughput_qps") or summary.get(
-            "actual_qps"
-        )
+        value = summary.get("completion_throughput_qps") or summary.get("actual_qps")
         return None if value is None else float(value)
     raise KeyError(name)
 
@@ -138,13 +135,9 @@ def write_csv(output: Path, rows: list[dict[str, Any]]) -> Path:
                     "failed": summary.get("failed"),
                     "timeouts": timeout_count(summary),
                     "success_rate": summary.get("success_rate"),
-                    "service_mean_s_success_only": metric(
-                        row, "service_mean_s"
-                    ),
+                    "service_mean_s_success_only": metric(row, "service_mean_s"),
                     "service_p99_s_success_only": (
-                        None
-                        if service_p99 is None
-                        else float(service_p99) / 1000.0
+                        None if service_p99 is None else float(service_p99) / 1000.0
                     ),
                     "user_visible_p99_s_all_admissions": metric(
                         row, "user_visible_p99_s"
@@ -217,9 +210,7 @@ def plot_dashboard(
             axis.set_title(f"{workload}: {label.splitlines()[0]}")
     ordered_handles = [handles[system] for system in SYSTEM_ORDER if system in handles]
     ordered_labels = [
-        SHORT_LABELS.get(system, system)
-        for system in SYSTEM_ORDER
-        if system in handles
+        SHORT_LABELS.get(system, system) for system in SYSTEM_ORDER if system in handles
     ]
     fig.legend(
         ordered_handles,
@@ -246,13 +237,10 @@ def plot_dashboard(
 
 def plot_coverage(rows: list[dict[str, Any]], output: Path) -> None:
     columns = [
-        (workload, qps)
-        for workload in ("Search", "Native Add")
-        for qps in (1, 5, 10)
+        (workload, qps) for workload in ("Search", "Native Add") for qps in (1, 5, 10)
     ]
     selected = {
-        (row["system_label"], row["workload"], int(row["qps"])): row
-        for row in rows
+        (row["system_label"], row["workload"], int(row["qps"])): row for row in rows
     }
     values: list[list[int]] = []
     annotations: list[list[str]] = []
@@ -283,14 +271,14 @@ def plot_coverage(rows: list[dict[str, Any]], output: Path) -> None:
     cmap = ListedColormap(["#D9D9D9", "#E57373", "#FFD166", "#76C893"])
     axis.imshow(values, cmap=cmap, vmin=-0.5, vmax=3.5, aspect="auto")
     axis.set_xticks(range(len(columns)))
-    axis.set_xticklabels(
-        [f"{workload}\nQPS {qps}" for workload, qps in columns]
-    )
+    axis.set_xticklabels([f"{workload}\nQPS {qps}" for workload, qps in columns])
     axis.set_yticks(range(len(SYSTEM_ORDER)))
     axis.set_yticklabels([SHORT_LABELS.get(system, system) for system in SYSTEM_ORDER])
     for row_index, text_row in enumerate(annotations):
         for column_index, text in enumerate(text_row):
-            axis.text(column_index, row_index, text, ha="center", va="center", fontsize=8)
+            axis.text(
+                column_index, row_index, text, ha="center", va="center", fontsize=8
+            )
     axis.set_title(
         "Collected Track C coverage (successful/formal admissions)",
         fontsize=14,

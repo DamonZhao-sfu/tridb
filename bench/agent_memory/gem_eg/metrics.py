@@ -92,7 +92,9 @@ def parity(
     tie_equivalent = exact
     if not exact and observed_distances is not None and expected_distances is not None:
         a, b = sorted(observed_distances), sorted(expected_distances)
-        tie_equivalent = len(a) == len(b) and all(abs(x - y) <= TIE_EPS for x, y in zip(a, b))
+        tie_equivalent = len(a) == len(b) and all(
+            abs(x - y) <= TIE_EPS for x, y in zip(a, b)
+        )
     return exact, recall, tie_equivalent
 
 
@@ -147,7 +149,9 @@ class Accumulator:
             # of every quality number is visible.
             "n_empty_ideal": self.n_empty_ideal,
             "parity_exact_rate": round(self.parity_exact / (self.n or 1), 4),
-            "parity_tie_equivalent_rate": round(self.parity_tie_equivalent / (self.n or 1), 4),
+            "parity_tie_equivalent_rate": round(
+                self.parity_tie_equivalent / (self.n or 1), 4
+            ),
             "oracle_recall": round(self.recall_sum / (self.n or 1), 4),
             "ndcg": round(self.ndcg_sum / scored, 4),
             # How much of the arm-independent ideal this formulation could reach AT
@@ -155,7 +159,9 @@ class Accumulator:
             # see the good nodes" from "sees them but ranks them badly".
             "ndcg_ceiling": round(self.ceiling_sum / scored, 4),
             "rank_efficiency": (
-                round(self.ndcg_sum / self.ceiling_sum, 4) if self.ceiling_sum > 0 else None
+                round(self.ndcg_sum / self.ceiling_sum, 4)
+                if self.ceiling_sum > 0
+                else None
             ),
             "harmful": round(self.harmful_sum / scored, 4),
             "trivial_hit_rate": round(self.trivial_hits / (self.n or 1), 4),

@@ -75,7 +75,9 @@ def _best_program(conn: psycopg.Connection, task_uid: str) -> dict[str, Any] | N
     }
 
 
-def _evaluator_run_rel(conn: psycopg.Connection, task_uid: str, raw: Path) -> str | None:
+def _evaluator_run_rel(
+    conn: psycopg.Connection, task_uid: str, raw: Path
+) -> str | None:
     """Any session of this task that shipped a run-local evaluator."""
     for (run_rel,) in conn.execute(
         "SELECT run_rel FROM gem_eg_session WHERE task_uid = %s ORDER BY session_uid",
@@ -87,7 +89,10 @@ def _evaluator_run_rel(conn: psycopg.Connection, task_uid: str, raw: Path) -> st
 
 
 def check(
-    conn: psycopg.Connection, task_uid: str, raw: Path, timeout: int,
+    conn: psycopg.Connection,
+    task_uid: str,
+    raw: Path,
+    timeout: int,
     tolerance: float = 1e-2,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {"task_uid": task_uid}
@@ -118,9 +123,7 @@ def check(
             return {**result, "status": "timeout", "timeout_s": timeout}
 
     marker = "@@RESULT@@"
-    line = next(
-        (ln for ln in proc.stdout.splitlines() if ln.startswith(marker)), None
-    )
+    line = next((ln for ln in proc.stdout.splitlines() if ln.startswith(marker)), None)
     if line is None:
         return {
             **result,
@@ -166,11 +169,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--domain", default=None, help="math | ale; default both")
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument(
-        "--tolerance", type=float, default=1e-2,
+        "--tolerance",
+        type=float,
+        default=1e-2,
         help="relative delta still counted as a reproduction. Default 1e-2: the "
-             "optimiser-based evaluators drift up to 4.6e-3 between library versions, "
-             "and a task whose scores move by more than 1%% cannot be compared to its "
-             "recorded numbers at all.",
+        "optimiser-based evaluators drift up to 4.6e-3 between library versions, "
+        "and a task whose scores move by more than 1%% cannot be compared to its "
+        "recorded numbers at all.",
     )
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args(argv)
@@ -199,12 +204,16 @@ def main(argv: list[str] | None = None) -> int:
     exact = [r for r in rows if r["status"] == "reproduced"]
     within = [r for r in rows if r["status"] == "reproduced_within_tolerance"]
     passed = exact + within
-    print(f"\ngate: {len(passed)}/{len(rows)} usable "
-          f"({len(exact)} exact, {len(within)} within {args.tolerance:g})")
+    print(
+        f"\ngate: {len(passed)}/{len(rows)} usable "
+        f"({len(exact)} exact, {len(within)} within {args.tolerance:g})"
+    )
     for row in within:
-        print(f"  NOTE {row['task_uid']}: scores drift by {row['rel_delta']:.1e}; "
-              "our fitness cannot be compared to the recorded value below that "
-              "resolution")
+        print(
+            f"  NOTE {row['task_uid']}: scores drift by {row['rel_delta']:.1e}; "
+            "our fitness cannot be compared to the recorded value below that "
+            "resolution"
+        )
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps({"tasks": rows}, indent=2), encoding="utf-8")

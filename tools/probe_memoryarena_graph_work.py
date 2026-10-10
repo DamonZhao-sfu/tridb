@@ -243,7 +243,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         ).fetchone()[0]
     )
     if observed_units != expected_units:
-        raise RuntimeError(f"source scopes incomplete: {observed_units}!={expected_units}")
+        raise RuntimeError(
+            f"source scopes incomplete: {observed_units}!={expected_units}"
+        )
     rows = conn.execute(
         "SELECT scope_id,id,(metadata->>'session_ordinal')::integer FROM gem_unit"
         " WHERE scope_id=ANY(%s)",
@@ -295,7 +297,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     (fused["selected_ids"], scope_id, session.ordinal),
                 ).fetchone()
                 if int(selected_rows[0]) != len(fused["selected_ids"]):
-                    raise RuntimeError(f"fused cutoff/scope violation: {session.session_uid}")
+                    raise RuntimeError(
+                        f"fused cutoff/scope violation: {session.session_uid}"
+                    )
                 output.write(
                     json.dumps(
                         {

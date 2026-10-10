@@ -61,21 +61,30 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dsn", default=DEFAULT_DSN)
     ap.add_argument("--scope", default=DEFAULT_SCOPE)
     ap.add_argument("--normalized", type=Path, default=DEFAULT_NORMALIZED)
-    ap.add_argument("--load-receipt", type=Path,
-                    default=Path("bench/out/polyglot/load_receipt.json"))
+    ap.add_argument(
+        "--load-receipt",
+        type=Path,
+        default=Path("bench/out/polyglot/load_receipt.json"),
+    )
     ap.add_argument("--limit", type=int, default=200)
     ap.add_argument("--seed", type=int, default=20260825)
     ap.add_argument("--queries", default="W1.a")
     ap.add_argument("--k", type=int, default=5)
     ap.add_argument("--out", type=Path, default=None)
-    ap.add_argument("--min-exact", type=float, default=0.95,
-                    help="required fraction of queries where both systems return the "
-                         "identical ordered result set")
+    ap.add_argument(
+        "--min-exact",
+        type=float,
+        default=0.95,
+        help="required fraction of queries where both systems return the "
+        "identical ordered result set",
+    )
     args = ap.parse_args(argv)
 
     receipt = require_load_receipt(args.load_receipt)
-    print(f"polyglot load receipt: {receipt['rows_loaded']:,} rows, "
-          f"completed {receipt['completed_at']}")
+    print(
+        f"polyglot load receipt: {receipt['rows_loaded']:,} rows, "
+        f"completed {receipt['completed_at']}"
+    )
 
     # Import late: arm C's backend is optional, and a missing Milvus client should
     # produce a clear gate failure rather than an ImportError at module load.
@@ -87,7 +96,9 @@ def main(argv: list[str] | None = None) -> int:
     from bench.agent_memory.gem_oe.retrievers import GemRetriever, PolyglotRetriever
 
     corpus = Corpus.load(args.normalized, vectors=args.normalized / "vectors.npz")
-    points = [dp for dp in GroundTruth(corpus).all_points() if dp.query_id == args.queries]
+    points = [
+        dp for dp in GroundTruth(corpus).all_points() if dp.query_id == args.queries
+    ]
     import random
 
     chosen = random.Random(args.seed).sample(points, min(args.limit, len(points)))
@@ -101,7 +112,9 @@ def main(argv: list[str] | None = None) -> int:
     empties = 0
     started = time.perf_counter()
     for dp in chosen:
-        spec = gem._spec(dp.task_uid, _StubParent(dp.parent_fitness), args.k, dp.iteration)
+        spec = gem._spec(
+            dp.task_uid, _StubParent(dp.parent_fitness), args.k, dp.iteration
+        )
         gem_ids = list(W1Engine(store, args.scope).run(spec, gem.knobs).ids)
         poly_ids, _ = polyglot.backend.reuse_query(spec)
         poly_ids = list(poly_ids)
@@ -110,15 +123,17 @@ def main(argv: list[str] | None = None) -> int:
         if not poly_ids:
             empties += 1
         exact, recall, tie_equivalent = parity(poly_ids, gem_ids, distances=None)
-        rows.append({
-            "dp_id": dp.dp_id,
-            "task_uid": dp.task_uid,
-            "gem": gem_ids,
-            "polyglot": poly_ids,
-            "exact": exact,
-            "recall": recall,
-            "tie_equivalent": tie_equivalent,
-        })
+        rows.append(
+            {
+                "dp_id": dp.dp_id,
+                "task_uid": dp.task_uid,
+                "gem": gem_ids,
+                "polyglot": poly_ids,
+                "exact": exact,
+                "recall": recall,
+                "tie_equivalent": tie_equivalent,
+            }
+        )
 
     n = len(rows) or 1
     summary = {
@@ -132,16 +147,16 @@ def main(argv: list[str] | None = None) -> int:
         "load_receipt": receipt,
     }
     summary["passed"] = (
-        empties == 0
-        and summary["exact_rate"] >= args.min_exact
-        and len(rows) > 0
+        empties == 0 and summary["exact_rate"] >= args.min_exact and len(rows) > 0
     )
     for key, value in summary.items():
         if key != "load_receipt":
             print(f"  {key:<26} {value}")
     if empties:
-        print(f"\n  {empties} queries returned NOTHING -- treated as an outage, "
-              "not as an empty eligible set")
+        print(
+            f"\n  {empties} queries returned NOTHING -- treated as an outage, "
+            "not as an empty eligible set"
+        )
     print(f"\ngate: {'PASS' if summary['passed'] else 'FAIL'}")
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)

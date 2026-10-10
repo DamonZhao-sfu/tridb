@@ -42,18 +42,18 @@ WRITER_LOCK_KEY = "gem_eg_vid_alloc"
 #: type and under the rollup. The rollup copy is a physical duplicate, not a second
 #: logical edge, and the load receipt counts them apart.
 EG_EDGE_TYPES: tuple[str, ...] = (
-    "eg_has_session",   # task    -> session
-    "eg_has_node",      # session -> node
-    "eg_hier",          # rollup of the two above, for one-call depth-2 BFS
-    "eg_lineage",       # parent  -> child   (the causal edit)
-    "eg_context",       # context -> consumer (inspiration; NOT causal parenthood)
-    "eg_has_prompt",    # node    -> prompt
+    "eg_has_session",  # task    -> session
+    "eg_has_node",  # session -> node
+    "eg_hier",  # rollup of the two above, for one-call depth-2 BFS
+    "eg_lineage",  # parent  -> child   (the causal edit)
+    "eg_context",  # context -> consumer (inspiration; NOT causal parenthood)
+    "eg_has_prompt",  # node    -> prompt
     # Inverses. graph_store supports OUTGOING traversal only — direction=in raises
     # "only GRAPH_SCAN_OUTGOING is supported" — so ancestors and "which session owns
     # this node" are reachable ONLY through edges we materialize ourselves. Flagged
     # derived_inverse=true and excluded from logical edge counts.
-    "eg_child_of",      # child   -> parent
-    "eg_hier_inv",      # node    -> session -> task
+    "eg_child_of",  # child   -> parent
+    "eg_hier_inv",  # node    -> session -> task
     # Cross-modal path statistic for the optimizer experiment.  For each node seed,
     # one-hop adjacency contains its depth-3 lineage reach ordered by
     # (fitness DESC, uid).  It is a native graph synopsis, never a relational join.
@@ -153,7 +153,9 @@ class EgStore:
 
     def edge_type_id(self, name: str) -> int:
         if name not in EG_EDGE_TYPES:
-            raise EgError(f"unregistered EG edge type {name!r}; expected one of {EG_EDGE_TYPES}")
+            raise EgError(
+                f"unregistered EG edge type {name!r}; expected one of {EG_EDGE_TYPES}"
+            )
         if name not in self._edge_types:
             self.bootstrap_edge_types()
         return self._edge_types[name]
@@ -161,7 +163,9 @@ class EgStore:
     # -- vid allocation --------------------------------------------------
 
     def lock_writer(self) -> None:
-        self.conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (WRITER_LOCK_KEY,))
+        self.conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtext(%s))", (WRITER_LOCK_KEY,)
+        )
 
     def allocate_vertices(self, count: int) -> list[int]:
         """Reserve ``count`` dense vids in one locked span.
@@ -294,7 +298,9 @@ class EgStore:
             ).fetchone()[0]
         )
         out["am_visible_edges"] = int(
-            self.conn.execute("SELECT graph_store.gph_visible_edge_count()").fetchone()[0]
+            self.conn.execute("SELECT graph_store.gph_visible_edge_count()").fetchone()[
+                0
+            ]
         )
         return out
 

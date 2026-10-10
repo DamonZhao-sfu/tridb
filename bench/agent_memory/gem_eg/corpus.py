@@ -39,7 +39,11 @@ def failure_class(error_signature: str | None) -> str:
     """
     if not error_signature:
         return "clean"
-    return "execution" if error_signature.startswith(("judge:", "error:")) else "search_rejected"
+    return (
+        "execution"
+        if error_signature.startswith(("judge:", "error:"))
+        else "search_rejected"
+    )
 
 
 @dataclass
@@ -56,8 +60,12 @@ class Corpus:
     #: context/inspiration, kept strictly apart from lineage
     context_out: dict[str, list[str]] = field(default_factory=lambda: defaultdict(list))
     #: hierarchy
-    task_sessions: dict[str, list[str]] = field(default_factory=lambda: defaultdict(list))
-    session_nodes: dict[str, list[str]] = field(default_factory=lambda: defaultdict(list))
+    task_sessions: dict[str, list[str]] = field(
+        default_factory=lambda: defaultdict(list)
+    )
+    session_nodes: dict[str, list[str]] = field(
+        default_factory=lambda: defaultdict(list)
+    )
 
     #: uid -> row in `vectors`; a uid absent here has no embedding, which is a real
     #: state (Sessions and Prompts are hops, not answers) and never an error.
@@ -129,7 +137,9 @@ class Corpus:
         `if (vnull) continue;`, so the oracle drops exactly what the engine drops.
         """
         out = np.full(len(uids), np.inf, dtype=np.float64)
-        rows = [(i, self.vector_row[u]) for i, u in enumerate(uids) if u in self.vector_row]
+        rows = [
+            (i, self.vector_row[u]) for i, u in enumerate(uids) if u in self.vector_row
+        ]
         if not rows or self.vectors is None:
             return out
         idx = np.fromiter((i for i, _ in rows), dtype=np.int64, count=len(rows))
@@ -154,6 +164,39 @@ class Corpus:
         seen = {seed}
         order: list[str] = []
         for _ in range(hops):
+            nxt: list[str] = []
+            for node in frontier:
+                for neighbour in self._out(node, relation):
+                    if neighbour not in seen:
+                        seen.add(neighbour)
+                        order.append(neighbour)
+                        nxt.append(neighbour)
+            if not nxt:
+                break
+            frontier = nxt
+        return order
+
+    def traverse_many(
+        self,
+        seeds: list[str],
+        *,
+        relation: str,
+        hops: int,
+        include_seeds: bool = False,
+    ) -> list[str]:
+        """Deterministic multi-source BFS: one shared frontier, distinct vertices.
+
+        Seeds are deduplicated in first-occurrence order and expanded level by level
+        in seed/frontier order, so a vertex reachable from several seeds appears once,
+        at its first (shallowest, earliest-seed) discovery. This order is the
+        `graph_inject` candidate policy's injection contract. With `include_seeds`
+        the deduplicated seeds lead the result; otherwise they are excluded, like
+        :meth:`traverse`.
+        """
+        frontier = list(dict.fromkeys(seeds))
+        seen = set(frontier)
+        order = list(frontier) if include_seeds else []
+        for _ in range(max(hops, 0)):
             nxt: list[str] = []
             for node in frontier:
                 for neighbour in self._out(node, relation):
@@ -208,7 +251,12 @@ class Corpus:
             for u in self.session_nodes.get(session_uid, [])
             if self.nodes[u]["is_valid"] and self.nodes[u]["fitness"] is not None
         ]
-        rows.sort(key=lambda n: (n["iteration"] if n["iteration"] is not None else 0, n["node_uid"]))
+        rows.sort(
+            key=lambda n: (
+                n["iteration"] if n["iteration"] is not None else 0,
+                n["node_uid"],
+            )
+        )
         out: list[tuple[int, str, float]] = []
         best: float | None = None
         for node in rows:

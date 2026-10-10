@@ -117,10 +117,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--problem", required=True, help="e.g. ahc024")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument(
-        "--num-cases", type=int, default=10,
+        "--num-cases",
+        type=int,
+        default=10,
         help="public cases per evaluation. The corpus used 50; 10 keeps a single "
-             "evaluation inside the wrapper's deadline while still averaging over "
-             "enough cases that one unlucky instance cannot decide the score.",
+        "evaluation inside the wrapper's deadline while still averaging over "
+        "enough cases that one unlucky instance cannot decide the score.",
     )
     ap.add_argument("--language", default="cpp20")
     ap.add_argument("--workers", type=int, default=8)
@@ -128,8 +130,12 @@ def main(argv: list[str] | None = None) -> int:
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(
-        TEMPLATE.format(problem=args.problem, num_cases=args.num_cases,
-                        language=args.language, workers=args.workers),
+        TEMPLATE.format(
+            problem=args.problem,
+            num_cases=args.num_cases,
+            language=args.language,
+            workers=args.workers,
+        ),
         encoding="utf-8",
     )
     print(f"{args.problem} -> {args.out} ({args.num_cases} cases, {args.language})")

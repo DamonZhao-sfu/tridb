@@ -28,7 +28,6 @@ from pathlib import Path
 from typing import Any
 
 
-
 def _iter_prompts(run: Path) -> dict[int, str]:
     """Rendered prompts by iteration, from the evolution trace."""
     trace = run / "evolution_trace.jsonl"
@@ -52,9 +51,7 @@ def _iter_prompts(run: Path) -> dict[int, str]:
 
 
 def check(run: Path, *, allow_missing_fraction: float = 0.0) -> dict[str, Any]:
-    injections = [
-        json.loads(line) for line in (run / "injection_trace.jsonl").open()
-    ]
+    injections = [json.loads(line) for line in (run / "injection_trace.jsonl").open()]
     prompts = _iter_prompts(run)
 
     checked = 0
@@ -85,12 +82,14 @@ def check(run: Path, *, allow_missing_fraction: float = 0.0) -> dict[str, Any]:
             checked += 1
             fingerprint = prints[index] if index < len(prints) else ""
             if not fingerprint or fingerprint not in text:
-                absent.append({
-                    "iteration": row["iteration"],
-                    "program_id": pid,
-                    "uid": uids[index] if index < len(uids) else "",
-                    "fingerprint": fingerprint[:60],
-                })
+                absent.append(
+                    {
+                        "iteration": row["iteration"],
+                        "program_id": pid,
+                        "uid": uids[index] if index < len(uids) else "",
+                        "fingerprint": fingerprint[:60],
+                    }
+                )
 
     total_injected = sum(len(r.get("injected_ids") or []) for r in injections)
     result = {
@@ -125,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=0.0,
         help="tolerance for injected programs absent from the prompt; defaults to "
-             "zero because any silent drop unbalances the token budget the arms share",
+        "zero because any silent drop unbalances the token budget the arms share",
     )
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args(argv)

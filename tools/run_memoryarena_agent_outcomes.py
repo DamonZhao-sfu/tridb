@@ -184,18 +184,24 @@ def _task_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:
     if not ordered:
         raise ValueError("task has no evaluated sessions")
     correct = [float(bool(row["exact_match"])) for row in ordered]
-    cumulative = [statistics.fmean(correct[: index + 1]) for index in range(len(correct))]
+    cumulative = [
+        statistics.fmean(correct[: index + 1]) for index in range(len(correct))
+    ]
     return {
         "all_session_accuracy": statistics.fmean(correct),
         "cross_session_accuracy": statistics.fmean(correct),
         "final_session_success": correct[-1],
         "all_sessions_success": float(all(correct)),
         "progress_aulc": statistics.fmean(cumulative),
-        "prompt_tokens": float(sum(int(row["usage"].get("prompt_tokens", 0)) for row in ordered)),
+        "prompt_tokens": float(
+            sum(int(row["usage"].get("prompt_tokens", 0)) for row in ordered)
+        ),
         "completion_tokens": float(
             sum(int(row["usage"].get("completion_tokens", 0)) for row in ordered)
         ),
-        "time_to_target_ms": float(sum(float(row["effective_total_ms"]) for row in ordered)),
+        "time_to_target_ms": float(
+            sum(float(row["effective_total_ms"]) for row in ordered)
+        ),
     }
 
 
@@ -228,7 +234,9 @@ def _paired_bootstrap(
 
 
 def _manifest_hash(payload: Mapping[str, Any]) -> str:
-    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -241,7 +249,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     corpus = load_export(args.export_dir)
     if corpus.config != "progressive_search":
-        raise ValueError("this deterministic exact-answer track supports progressive_search only")
+        raise ValueError(
+            "this deterministic exact-answer track supports progressive_search only"
+        )
 
     ledger = CallLedger()
     embedding_client = OpenAIEmbeddingClient(
@@ -272,9 +282,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     token_counter = EndpointTokenCounter(
         args.answer_base_url, args.answer_model, args.timeout_seconds
     )
-    memory = TriDBGovernedMemory(GemStore.connect(args.dsn, dim=args.dim), embedder=embedder)
+    memory = TriDBGovernedMemory(
+        GemStore.connect(args.dsn, dim=args.dim), embedder=embedder
+    )
     memory.init_schema()
-    server = memory.store.conn.execute("SELECT version(), current_database()").fetchone()
+    server = memory.store.conn.execute(
+        "SELECT version(), current_database()"
+    ).fetchone()
     extensions = memory.store.conn.execute(
         "SELECT extname, extversion FROM pg_extension"
         " WHERE extname IN ('vector','graph_store_am','tjs_pg') ORDER BY 1"
@@ -288,8 +302,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     try:
         with ExitStack() as stack:
-            outcomes_file = stack.enter_context(outcomes_path.open("x", encoding="utf-8"))
-            receipts_file = stack.enter_context(receipts_path.open("x", encoding="utf-8"))
+            outcomes_file = stack.enter_context(
+                outcomes_path.open("x", encoding="utf-8")
+            )
+            receipts_file = stack.enter_context(
+                receipts_path.open("x", encoding="utf-8")
+            )
             updates_file = stack.enter_context(updates_path.open("x", encoding="utf-8"))
             arm_values = [Arm(name) for name in args.arms]
             for task_index, task in enumerate(corpus.tasks[: args.max_tasks]):
@@ -304,7 +322,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         write_enabled=arm is not Arm.MEMORY_OFF,
                     )
                     existing = memory.store.conn.execute(
-                        "SELECT count(*) FROM gem_unit WHERE scope_id=%s", (backend.scope_id,)
+                        "SELECT count(*) FROM gem_unit WHERE scope_id=%s",
+                        (backend.scope_id,),
                     ).fetchone()[0]
                     if int(existing):
                         raise RuntimeError(
@@ -322,7 +341,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     for session in task.sessions:
                         admitted = time.perf_counter()
                         opened = driver.open_session(session)
-                        seeded = args.seed_first_session_with_gold and session.ordinal == 0
+                        seeded = (
+                            args.seed_first_session_with_gold and session.ordinal == 0
+                        )
                         if seeded:
                             response = session.gold_answer
                             predicted = session.gold_exact_answer
@@ -330,11 +351,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                             usage: Mapping[str, Any] = {}
                             effective_ttft_ms = 0.0
                             generation_ms = 0.0
-                            effective_total_ms = (time.perf_counter() - admitted) * 1000.0
+                            effective_total_ms = (
+                                time.perf_counter() - admitted
+                            ) * 1000.0
                         else:
                             result = answer_client.stream_chat(
                                 model=args.answer_model,
-                                messages=_messages(session.question, opened.injection_text),
+                                messages=_messages(
+                                    session.question, opened.injection_text
+                                ),
                                 max_tokens=args.max_answer_tokens,
                                 temperature=0.0,
                                 seed=args.seed,
@@ -361,7 +386,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                             "task_uid": task.task_uid,
                             "session_uid": session.session_uid,
                             "ordinal": session.ordinal,
-                            "question_sha256": hashlib.sha256(session.question.encode()).hexdigest(),
+                            "question_sha256": hashlib.sha256(
+                                session.question.encode()
+                            ).hexdigest(),
                             "gold_exact_answer": session.gold_exact_answer,
                             "predicted_exact_answer": predicted,
                             "evaluated": not seeded,
@@ -369,7 +396,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                             "normalized_exact_match_v1": exact_match,
                             "exact_match": exact_match,
                             "response": response,
-                            "response_sha256": hashlib.sha256(response.encode()).hexdigest(),
+                            "response_sha256": hashlib.sha256(
+                                response.encode()
+                            ).hexdigest(),
                             "injection_tokens": opened.receipt.injection_tokens,
                             "usage": usage,
                             "effective_ttft_ms": effective_ttft_ms,
@@ -379,12 +408,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                                 "receipt_sha256"
                             ],
                         }
-                        outcomes_file.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+                        outcomes_file.write(
+                            json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
+                        )
                         outcomes_file.flush()
                         by_arm_task[arm.value][task.task_uid].append(row)
                         if session.ordinal > 0:
                             receipts_file.write(
-                                json.dumps(opened.receipt.as_dict(), sort_keys=True) + "\n"
+                                json.dumps(opened.receipt.as_dict(), sort_keys=True)
+                                + "\n"
                             )
                             receipts_file.flush()
                         update = driver.complete_session(session, response=response)
