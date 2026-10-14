@@ -1,0 +1,28 @@
+# Current Program Information
+- Current performance metrics: {metrics}
+- Areas identified for improvement: {improvement_areas}
+
+{artifacts}
+
+# Program Evolution History
+{evolution_history}
+
+# Current Program
+```{language}
+{current_program}
+```
+
+# Task
+Make one targeted change that is likely to improve the specified metrics.
+
+Return exactly one complete SEARCH/REPLACE block in this format:
+
+<<<<<<< SEARCH
+exact non-empty text copied from the current program
+=======
+replacement text
+>>>>>>> REPLACE
+
+The SEARCH text must match the current program exactly. Return only the block: no
+analysis, explanation, preamble, epilogue, or Markdown fence. Do not rewrite the
+entire program.

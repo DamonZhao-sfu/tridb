@@ -24,11 +24,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import logging
 import platform
 import subprocess
 import sys
 import time
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -164,7 +166,7 @@ def build_config(config_cls: Any, args: argparse.Namespace) -> Any:
     # room under a 65,536 window; at 131,072 a 61k ALE input plus 8192 output has
     # 60k to spare, so the special case would only make ALE completions shorter
     # than math's for no reason.
-    cfg.llm.max_tokens = FROZEN["max_tokens"]
+    cfg.llm.max_tokens = args.max_tokens or FROZEN["max_tokens"]  # override recorded in the receipt
     # `LLMEnsemble` indexes `models_cfg` directly, so an empty list is not "use the
     # top-level settings" -- it is `list index out of range` on the first generation,
     # logged once per iteration and otherwise survivable, which is how a whole 100
@@ -224,6 +226,13 @@ def build_config(config_cls: Any, args: argparse.Namespace) -> Any:
     # does not. The two concerns are independent in this experiment: the treatment is
     # what external memory shows the agent, not a second output-format obligation.
     cfg.prompt.programs_as_changes_description = False
+    if args.diff_ws_tolerant:
+        from bench.agent_memory.gem_oe.diff_patch import enable
+
+        enable()
+    if args.no_simplify_nudge:  # OpenEvolve's default 'Consider simplifying - code length exceeds 500 characters'
+        cfg.prompt.suggest_simplification_after_chars = None  # makes the LLM delete still-referenced C++ code
+        cfg.prompt.code_length_threshold = None
 
     cfg.max_code_length = FROZEN["max_code_length"]
     cfg.database.num_islands = FROZEN["num_islands"]
@@ -338,6 +347,19 @@ def _require_beat_parent(args: argparse.Namespace) -> bool:
     raise ValueError(f"--require-beat-parent must be true or false, got {value!r}")
 
 
+def resolve_task_trimem(dsn: str, task_uid: str) -> dict[str, Any]:
+    """Evaluator + seed (majority corpus root) from the TriMEM experience graph."""
+    import psycopg
+
+    from trimem.replay.tasks import resolve
+
+    with psycopg.connect(dsn) as conn:
+        t = resolve(conn, task_uid)
+    return {"task_key": t.key, "domain": task_uid.split(":")[0], "evaluator": str(t.evaluator),
+            "seed_node_uid": None, "seed_code": t.seed_code, "seed_fitness": t.seed_fitness,
+            "seed_artifact_uid": None, "seed_root_count": None, "seed_root_variants": None, "spec": t.spec}
+
+
 def build_retriever(
     args: argparse.Namespace, source_anchor_uid: str | None = None
 ) -> Any:
@@ -345,6 +367,50 @@ def build_retriever(
 
     if args.arm in ("none", "nocontext"):
         return NullRetriever()
+    if args.arm == "trimem-adaptive":
+        from bench.agent_memory.gem_oe.trimem_adaptive import TrimemAdaptiveRetriever, build_policy
+
+        saved = Path(args.resume_from).parents[2] / "policy.pkl" if args.resume_from else None
+        if saved is not None and saved.exists():  # continue the source cell's policy, posterior included
+            import pickle
+
+            policy = pickle.loads(saved.read_bytes())
+        elif args.space in ("v2", "v3"):
+            from bench.agent_memory.gem_oe.trimem_adaptive import build_policy_v2
+
+            policy = build_policy_v2(args.policy, args.policy_mode, prior_path=args.policy_prior,
+                                     seed=zlib.crc32(f"v2|{args.seed if args.seed is not None else FROZEN['random_seed']}"
+                                                     f"|{args.task}{'|' + args.resume_from if args.resume_from else ''}".encode()),
+                                     epsilon=args.policy_epsilon, lam_t=args.lambda_t, tol=args.o3_tol,
+                                     space=args.space, lam_l=args.lambda_l, out_budget=args.out_budget)
+            policy.fixed_name = args.fixed_config or ""
+        else:
+            policy = build_policy(args.policy, args.policy_mode, prior_path=args.policy_prior,
+                                  # per (seed, task[, resume point]): a shared seed would repeat one choice sequence
+                                  seed=zlib.crc32(f"{args.seed if args.seed is not None else FROZEN['random_seed']}|{args.task}"
+                                                  f"{'|' + args.resume_from if args.resume_from else ''}".encode()),
+                                  epsilon=args.policy_epsilon, lam_t=args.lambda_t, lam_a=args.lambda_a)
+        return TrimemAdaptiveRetriever(
+            dsn=args.trimem_dsn, policy=policy, session=args.out.name,
+            horizon=args.policy_horizon,
+            prompt_version=args.trimem_prompt_version or f"oe-{args.out.name}",
+            telemetry_path=args.out / "llm_telemetry.jsonl", require_changes=args.inject_as == "changes")
+    if args.arm == "trimem":
+        if getattr(args, "trajectory_store", False):
+            from bench.agent_memory.gem_oe.trajectory_retriever import TrajectoryRetriever
+
+            return TrajectoryRetriever(
+                dsn=args.trimem_dsn, plan=args.trajectory_plan, out=args.out,
+                total_token_budget=args.trajectory_total_token_budget,
+                objective=args.trajectory_objective,
+                memory_tokens=args.trajectory_memory_tokens,
+                include_code=args.trajectory_include_code,
+            )
+        from bench.agent_memory.gem_oe.trimem_retriever import TrimemRetriever
+
+        return TrimemRetriever(dsn=args.trimem_dsn, mode=args.trimem_mode, force=args.trimem_force,
+                               prompt_version=args.trimem_prompt_version or f"oe-{args.out.name}",
+                               require_changes=args.inject_as == "changes", graph=args.trimem_graph)
 
     from bench.agent_memory.gem_eg.store import EgStore
 
@@ -521,7 +587,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--arm",
         required=True,
-        choices=["nocontext", "none", "gem", "polyglot", "cognee"],
+        choices=["nocontext", "none", "gem", "polyglot", "cognee", "trimem", "trimem-adaptive"],
         help="nocontext: no references at all (true lower bound). none: the run's own "
         "programs only, no external memory. gem/polyglot: external memory.",
     )
@@ -650,6 +716,69 @@ def main(argv: list[str] | None = None) -> int:
         "silently turn long prompts into failed iterations",
     )
     ap.add_argument("--checkpoint-interval", type=int, default=10)
+    ap.add_argument("--trimem-dsn", default="postgresql://127.0.0.1:55441/trimem_evo",
+                    help="TriMEM experience graph (arm trimem, and --task-source trimem)")
+    ap.add_argument("--trajectory-store", action="store_true",
+                    help="use rebuilt full-code trajectory schema and per-round agent context")
+    ap.add_argument("--trajectory-plan", default="P2+Rank",
+                    choices=["VGR", "P1", "P2", "SemRankOnly", "P1+Rank", "P2+Rank"])
+    ap.add_argument("--trajectory-total-token-budget", type=int, default=None,
+                    help="total generation-token allowance; unknown when omitted")
+    ap.add_argument("--trajectory-objective", default=None,
+                    help="current improvement objective; otherwise derived from actual parent feedback")
+    ap.add_argument("--trajectory-memory-tokens", type=int, default=16384)
+    ap.add_argument("--trajectory-prompt-tokens", type=int, default=32768,
+                    help="complete generation input budget, including the local Qwen chat template; output allowance is separate")
+    ap.add_argument("--trajectory-include-code", action="store_true", default=True,
+                    help="complete historical code is always included for trajectory-store (compatibility flag)")
+    ap.add_argument("--trimem-mode", choices=["trimodal", "hard", "rank", "filterrank", "seed-vgr", "seed-rank",
+                                              "seed-p1", "seed-p2", "seed-opt"], default="rank")
+    ap.add_argument("--trimem-force", default=None,
+                    help="pin the semantic operator's placement, e.g. d=base (semantic first) "
+                    "or d=top (traverse first); omit to let the optimizer choose")
+    ap.add_argument("--trimem-graph", default=None,
+                    choices=["mixed/down", "mixed/up", "lineage+similar/1", "lineage+similar/2", "lineage+similar/3"],
+                    help="arm trimem: traverse the 2-hop mixed path instead of lineage/down/1")
+    ap.add_argument("--trimem-prompt-version", default=None,
+                    help="cache namespace for this cell's semantic calls (default: the out dir name)")
+    ap.add_argument("--prompt-budget-tokens", type=int, default=None,
+                    help="input-token budget of one generation request; own inspirations are dropped whole "
+                         "(never truncated) to stay under it")
+    ap.add_argument("--resume-from", default=None,
+                    help="OpenEvolve checkpoint dir of a finished cell; runs its iterations "
+                    "last+1..--max-iterations into --out (the source cell is not modified)")
+    ap.add_argument("--lambda-l", type=float, default=0.1,
+                    help="O4 (v3): weight of the normalised expected-latency term")
+    ap.add_argument("--space", choices=["v1", "v2", "v3"], default="v1",
+                    help="v1: (family, k); v2: graph configuration (edge, direction, hops, fanout) x family x k, "
+                    "target = improvement over the run's best, separate 'inject nothing' estimator")
+    ap.add_argument("--o3-tol", type=float, default=0.0,
+                    help="O3 (v2): feasible if g(c) >= (1 - tol) * g(rank:5 on lineage/down/1/8)")
+    ap.add_argument("--diff-ws-tolerant", action="store_true",
+                    help="match SEARCH lines ignoring trailing whitespace (OpenEvolve drops non-matching blocks silently)")
+    ap.add_argument("--no-simplify-nudge", action="store_true",
+                    help="drop OpenEvolve's 'Consider simplifying - code length exceeds N characters' focus area")
+    ap.add_argument("--max-tokens", type=int, default=None,
+                    help="generation output cap (default FROZEN max_tokens 8192); must leave room in the context")
+    ap.add_argument("--fixed-config", default=None,
+                    help="--policy fixed (offline profiling): candidate to inject, e.g. 'rank:5@lineage/down/1/8' or 'none:0'")
+    ap.add_argument("--out-budget", type=float, default=None,
+                    help="O5: budget B of mean output tokens per call for the dual update of λ (default: prior's)")
+    ap.add_argument("--policy", choices=["random", "fixed", "o1", "o2", "o3", "o4", "o5"], default="random",
+                    help="arm trimem-adaptive: per-iteration choice of (plan family, k)")
+    ap.add_argument("--policy-mode", choices=["offline", "online-cold", "online-warm"], default="offline")
+    ap.add_argument("--policy-prior", default=None, help="pickle from trimem.objective.train")
+    ap.add_argument("--policy-epsilon", type=float, default=0.1)
+    ap.add_argument("--policy-horizon", type=int, default=20,
+                    help="iteration scale of the 'progress' feature; the prior was trained on 20-iteration runs")
+    ap.add_argument("--lambda-t", type=float, default=0.2, help="O2 token weight")
+    ap.add_argument("--lambda-a", type=float, default=0.0, help="anchoring penalty (ablation)")
+    ap.add_argument("--task-source", choices=["gem_eg", "trimem"], default="gem_eg",
+                    help="where the task's evaluator and seed program are resolved from")
+    ap.add_argument("--llm-telemetry", action="store_true",
+                    help="record per-request generation tokens/latency to llm_telemetry.jsonl")
+    ap.add_argument("--thinking", choices=["true", "false"], default=None,
+                    help="chat_template_kwargs.enable_thinking for every generation request")
     ap.add_argument(
         "--dry-run",
         action="store_true",
@@ -678,9 +807,36 @@ def main(argv: list[str] | None = None) -> int:
     )
     args.out.mkdir(parents=True, exist_ok=True)
 
+    if args.llm_telemetry or args.thinking is not None:
+        from bench.agent_memory.gem_oe import llm_telemetry
+
+        if args.thinking is not None:
+            os.environ[llm_telemetry.THINKING_ENABLED_ENV] = args.thinking
+        os.environ[llm_telemetry.TELEMETRY_PATH_ENV] = str((args.out / "llm_telemetry.jsonl").resolve())
+        os.environ.setdefault(llm_telemetry.STREAM_ENV, "1")  # TTFT; the generated text is unchanged
+        llm_telemetry.install_from_env()
     config_cls, controller_cls = _load_openevolve()
-    task = resolve_task(args.dsn, args.task, args.raw)
+    task = (resolve_task_trimem(args.trimem_dsn, args.task) if args.task_source == "trimem"
+            else resolve_task(args.dsn, args.task, args.raw))
     cfg = build_config(config_cls, args)
+    if args.trajectory_store:
+        if args.arm != "trimem" or args.task_source != "trimem":
+            raise ValueError("--trajectory-store requires --arm trimem --task-source trimem")
+        if min(args.trajectory_memory_tokens, args.trajectory_prompt_tokens) <= 0:
+            raise ValueError("trajectory prompt and memory token budgets must be positive")
+        from bench.agent_memory.gem_oe.trajectory_prompt import install
+
+        install()
+        args.inject_as = "code"
+        cfg.prompt.num_top_programs = 1
+        cfg.prompt.num_diverse_programs = 4
+        cfg.prompt.template_dir = str(Path(__file__).parent / "prompts" / "trajectory")
+        # task.spec is the original task system message, retained verbatim.
+        cfg.prompt.system_message = task["spec"]
+        os.environ["TRIMEM_TRAJECTORY_PROMPT_LOG"] = str((args.out / "prompt_context.jsonl").resolve())
+        os.environ["TRIMEM_TRAJECTORY_PROMPT_TOKEN_BUDGET"] = str(args.trajectory_prompt_tokens)
+        os.environ["TRIMEM_TRAJECTORY_MEMORY_TOKEN_BUDGET"] = str(args.trajectory_memory_tokens)
+        os.environ["TRIMEM_TRAJECTORY_ENABLE_THINKING"] = str(args.thinking).lower()
     retriever = build_retriever(args, source_anchor_uid=task["seed_node_uid"])
 
     seed_path = args.out / "initial_program.py"
@@ -730,6 +886,7 @@ def main(argv: list[str] | None = None) -> int:
         "task_uid": args.task,
         "language": args.language,
         "arm": args.arm,
+        "policy": ({"space": args.space, "o3_tol": args.o3_tol, "lambda_l": args.lambda_l, "kind": args.policy, "mode": args.policy_mode, "prior": args.policy_prior, "epsilon": args.policy_epsilon, "lambda_t": args.lambda_t, "lambda_a": args.lambda_a} if args.arm == "trimem-adaptive" else None),
         "retriever": retriever.name,
         "split": args.split,
         "seed_layer": args.seed_layer,
@@ -750,6 +907,14 @@ def main(argv: list[str] | None = None) -> int:
         ),
         "timing_schema": "gem_plan_timing_v1" if args.physical_plan else None,
         "injection_policy": args.injection_policy,
+        "trajectory_store": args.trajectory_store,
+        "trajectory_plan": args.trajectory_plan if args.trajectory_store else None,
+        "trajectory_memory_tokens": args.trajectory_memory_tokens if args.trajectory_store else None,
+        "trajectory_prompt_tokens": args.trajectory_prompt_tokens if args.trajectory_store else None,
+        "trajectory_total_token_budget": args.trajectory_total_token_budget if args.trajectory_store else None,
+        "trajectory_context_contract": "trajectory-context-v4-candidate-code" if args.trajectory_store else None,
+        "trajectory_top_programs": 1 if args.trajectory_store else None,
+        "trajectory_inspiration_target": 4 if args.trajectory_store else None,
         "inject_as": args.inject_as,
         "injection_render_contract": "external_program_code_is_changes_description"
         if args.inject_as == "changes"
@@ -759,6 +924,9 @@ def main(argv: list[str] | None = None) -> int:
         "injection_frequency": args.injection_frequency,
         "gate_closed": args.gate_closed,
         "max_iterations_override": args.max_iterations,
+        "max_tokens": args.max_tokens or FROZEN["max_tokens"],
+        "simplify_nudge": not args.no_simplify_nudge,
+        "diff_match": "rstrip" if args.diff_ws_tolerant else "exact",
         "max_injected": max_injected,
         "frozen": FROZEN,
         "resolved_seed": cfg.random_seed,
@@ -828,15 +996,34 @@ def main(argv: list[str] | None = None) -> int:
         frequency_seed=cfg.random_seed,
         gate_closed=args.gate_closed,
         render_mode=args.inject_as,
+        # chars ~ 3.2 per token for C++/Python (measured 3.5 on ALE prompts; 3.2 keeps a margin)
+        prompt_budget_chars=None if args.prompt_budget_tokens is None else int(3.2 * args.prompt_budget_tokens),
+        prompt_base_chars=len(task.get("spec") or "") + 12000,
     )
     controller.database = memory_db
     controller.evaluator.database = memory_db
+    if args.trajectory_store:
+        retriever.database = memory_db
+    if args.arm == "trimem-adaptive":
+        from bench.agent_memory.gem_oe.trimem_adaptive import install_observer
+
+        install_observer(memory_db, retriever)
 
     if args.gate_closed == "empty" and args.injection_frequency < 1.0:
         _install_zero_context_gate()
 
     try:
-        asyncio.run(controller.run())
+        if args.resume_from:
+            # Continue a finished cell from its checkpoint into THIS (new) out dir: the original
+            # cell's traces stay untouched. Iterations last+1 .. max_iterations run here.
+            memory_db.load(args.resume_from)
+            memory_db._iteration = memory_db.last_iteration
+            to_run = cfg.max_iterations - memory_db.last_iteration
+            receipt["resumed_from"] = args.resume_from
+            receipt["resumed_at_iteration"] = memory_db.last_iteration
+            asyncio.run(controller.run(iterations=to_run, checkpoint_path=args.resume_from))
+        else:
+            asyncio.run(controller.run())
         receipt["status"] = "complete"
         # Provisional: the real check is in the `finally` block, because
         # `controller.run()` returning is NOT proof the run happened. When an
@@ -850,14 +1037,17 @@ def main(argv: list[str] | None = None) -> int:
         raise
     finally:
         receipt["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        if hasattr(retriever, "close"):
+            retriever.close()
         traced = len(memory_db.injection_trace)
         receipt["iterations_traced"] = traced
-        receipt["iterations_expected"] = cfg.max_iterations
-        receipt["completion_fraction"] = round(traced / cfg.max_iterations, 4)
-        if receipt["status"] == "complete" and traced < cfg.max_iterations * 0.9:
+        expected = cfg.max_iterations - receipt.get("resumed_at_iteration", 0)
+        receipt["iterations_expected"] = expected
+        receipt["completion_fraction"] = round(traced / max(expected, 1), 4)
+        if receipt["status"] == "complete" and traced < expected * 0.9:
             receipt["status"] = "incomplete"
             receipt["error"] = (
-                f"only {traced}/{cfg.max_iterations} iterations ran. OpenEvolve "
+                f"only {traced}/{expected} iterations ran. OpenEvolve "
                 "returned without raising -- an evaluator timeout stops the loop "
                 "silently -- so this cell must not be read as a finished run."
             )

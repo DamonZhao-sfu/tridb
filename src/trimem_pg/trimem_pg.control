@@ -1,0 +1,7 @@
+# trimem_pg: TriMEM semantic-predicate CustomScan (ADR-0027)
+comment = 'TriMEM: planner-visible LLM semantic operators (SemFilter CustomScan)'
+default_version = '0.3.0'
+module_pathname = '$libdir/trimem_pg'
+relocatable = false
+schema = trimem
+requires = 'graph_store_am'

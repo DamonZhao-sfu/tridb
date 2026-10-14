@@ -1,5 +1,264 @@
 # Changelog
 
+## [0.13.8] - 2026-10-13
+### Features
+- Added circle packing to the four-task comparison, a fixed historical-best dashed reference,
+  method legends with visibility toggles, and observed-only curves for checkpoints 10/20/30/40/50.
+- Added a staged coordinator: finish all sixteen task-plan cells at 20, then resume each saved
+  checkpoint into a separate directory for iterations 21–50, saving checkpoints every ten rounds.
+- Designated experiment-trajectory-retrieval-v4 as the default code branch in tracked experiment
+  defaults, with branch/commit/source hashes recorded in launch manifests.
+### Design Rationale
+- Preserve completed first-stage measurements and compare continuation quality without rerunning
+  iterations 1–20. Historical corpus scores provide a stable reference rather than a moving target.
+### Notes & Caveats
+- Pending checkpoints remain unavailable until observed. Historical best is not an upper bound.
+- Runtime data, local database directories and model/corpus files remain external experiment inputs.
+
+## [0.13.7] - 2026-10-13
+### Features
+- Added task-priority parallel scheduling for the Math trajectory matrix, with live concurrency
+  control, per-cell status, completed-cell reuse, and CPU/GPU embedding placement.
+- Dedicated semantic worker concurrency is configurable. Parallel semantic usage with ambiguous
+  context ownership is marked unavailable instead of charged repeatedly to multiple cells.
+### Design Rationale
+- Fill both existing generation-service GPU replicas while prioritizing within-task plan comparisons.
+  Experiment semantics, prompt budgets, seeds and iteration counts remain fixed.
+### Notes & Caveats
+- The first convex13/VGR cell ran serially. Later parallel latency measurements include contention.
+- The user stopped the optimizer experiment and retained its archive before this resource change.
+
+## [0.13.6] - 2026-10-13
+### Features
+- Trajectory generation input budget is 32768 tokens including the local Qwen chat template.
+  Retrieved inspiration context has a 16384-token section budget and a hard maximum of four programs.
+- Budget accounting records original/final input tokens and whole-record removals. Mandatory current
+  code and feedback are never clipped. An oversized mandatory prompt is rejected explicitly.
+- Added the Codex execution plan for three Math tasks, four retrieval plans and 20 iterations,
+  with checkpoints at 10/20 and isolated new-store experiment outputs.
+### Design Rationale
+- Complete source programs and evaluation feedback need more room than summary-only context.
+  Separate input, reference-section and generation-output limits keep accounting unambiguous.
+### Notes & Caveats
+- The top-program section retains its independent 8192-token limit. The 32768 input cap excludes output.
+- SemRankOnly still annotates scores without reranking. Experiment reports must state that limitation.
+- Existing legacy experiments and their budgets remain unchanged.
+
+## [0.13.5] - 2026-10-13
+### Features
+- Added Current Evaluation Feedback and per-attempt Evaluation Feedback to trajectory prompts.
+  These render recorded metrics, diagnostics and artifacts without additional clipping or LLM summarization.
+- The trajectory snapshot explicitly loads selected-parent and recent-attempt artifacts beyond the
+  default OpenEvolve snapshot cap. Missing feedback remains explicit.
+- SemFilter now judges contextual usefulness using complete candidate code. Shared SemScore evidence
+  also includes complete code. The semantic prompt version is trajectory-context-v4-candidate-code.
+### Design Rationale
+- The agent needs its own observed failures in generation context, and semantic selection needs the
+  candidate implementation rather than relying only on historical intent claims.
+### Notes & Caveats
+- Source evaluators may already have shortened diagnostics. This change cannot reconstruct lost text.
+- Native semantic request limits reject oversize input instead of clipping candidate code.
+- Semantic scoring remains pointwise annotation; no ranking/sorting behavior changes in this release.
+
+## [0.13.4] - 2026-10-13
+### Features
+- Trajectory-store prompts preserve each task's original system message and show complete
+  retrieved code plus stored intent. Default target: four inspirations and one own-run top program.
+- Added actual recent-attempt history, with Changes/Metrics/Outcome based on combined_score
+  versus the recorded parent. History excludes external memories and future iterations.
+- Exported original-system templates for all 18 Math/ALE tasks, raw prompt examples, provenance,
+  system variants and measured historical reference-program counts.
+### Design Rationale
+- Recent attempts, own-run best programs and retrieved experiences serve different purposes.
+  Keep all three explicit. Template assembly makes no summarization model call.
+### Notes & Caveats
+- Opt-in trajectory-store worker wrapper only. Installed OpenEvolve and legacy runs are unchanged.
+- Inspiration and top-program sections each have an 8192-token limit. Oversize programs are skipped
+  whole and counted, never clipped. Thus the returned count can be below the configured target.
+- Top programs are selected from retained, evaluated current-run records across islands, excluding
+  explicitly invalid records and the current parent's ID/code. A missing alternative is shown honestly.
+
+## [0.13.3] - 2026-10-13
+### Features
+- Added a versioned full-code Qwen3 embedding contract and resumable isolated-corpus rebuild.
+  Corpus/query inputs share the same renderer, checkpoint and pooling. Oversize code is rejected,
+  never silently cut. Similarity adjacency is rebuilt as same-task, cross-session cosine top-16.
+- Added an opt-in OpenEvolve trajectory-store adapter with full task/parent code, actual evaluator
+  feedback, objective and remaining generation budget on every retrieval. Full-context semantic
+  requests replace v2 excerpts. Context files and hashes are recorded per round.
+- Added deterministic inspiration evidence cards with provenance, intent, framework changes,
+  fitness gain, validity/error and optional complete historical code. No post-retrieval summary
+  LLM is called. Whole cards exceeding the 8192-token memory section budget are skipped and counted.
+### Design Rationale
+- Code suffixes and current failures must affect retrieval. A 2000-character prefix omitted code
+  in 95.5% of stored Math/ALE attempts. Code vectors and derived graph edges must migrate together.
+- Existing summaries/intent are evidence from history, not instructions or newly generated summaries.
+### Notes & Caveats
+- New-schema path is explicitly enabled with --trajectory-store and the rebuilt DB on port 55450.
+  Active legacy ALE and frozen BO experiment paths retain their original embedding contracts.
+- Semantic scores annotate a streaming candidate sequence. This is not a global sort by score.
+- Remaining-token accounting currently covers generation calls reported in that run's telemetry,
+  not semantic retrieval calls. It remains null when no total budget is configured.
+- Native semantic mailbox capacity is 524288 bytes in the isolated cluster. Full current state
+  is capped at 393216 bytes with explicit rejection on overflow, not truncation.
+
+## [0.13.2] - 2026-10-13
+### Features
+- New-schema semantic retrieval now binds a `CurrentAgentContext` containing the actual
+  problem, immediate objective, program state, failure evidence, constraints and provenance.
+  Seed filters, endpoint filters, pointwise scores and lowered semantic joins receive it.
+- Added `trajectory-context-v2` input version and context digest. Bounded UTF-8 context views
+  report field omissions and source hashes. Unknown historical failures remain explicit.
+- Updated English prompt previews and added measured graph-degree statistics, traversal
+  directions and proposed seed/fanout/hop profiles to the explorer.
+### Design Rationale
+- Task identity alone cannot establish usefulness for the current agent state. Current-state
+  evidence is supplied independently of the retrieved candidate to avoid conflating the two.
+- Contexts are capped at 12,000 bytes, with request-size validation against the native
+  semantic input limit. This is separate from the final memory token budget.
+### Notes & Caveats
+- Historical contexts are reconstructed for inspection, not claimed to be recorded semantic
+  calls or leakage-free retrieval examples. Live callers must supply current state per request.
+- Active frozen BO runs and their old memory formatter remain unchanged. The new query path
+  does not automatically migrate their runtime. Proposed graph budgets are not quality optima.
+
+## [0.13.1] - 2026-10-13
+### Features
+- Loaded the complete EvoTrace corpus into the isolated `trimem_traj` database on port 55450.
+- Added optional `--merge-as-context` graph policy: lineage, context and similar, each with
+  reverse adjacency. Merge Parent B remains a context edge with its original label.
+- Preserved ambiguous response-to-attempt links as `llm_call.link_candidates` without asserting
+  an exact attempt ID. Added graph-policy reload guards.
+- Added `trimem/trajectory_query.py` for the new schema. Semantic score/filter evidence now
+  includes intent provenance, framework changes and parent/child fitness instead of the old
+  `changes` field. Native SemJoin is not claimed: a bounded join plus SemFilter expresses it.
+- Added offline full-table, native-graph and prompt explorers in
+  `triMEM_optimizer/trajectory_storage_v020_20261013/`, embedded in the English it20 report.
+### Design Rationale
+- Preserve active optimizer experiment hashes and snapshots. New-schema query compilation is
+  a separate entrypoint, with explicit SQL/EXPLAIN artifacts and pointwise LLM score semantics.
+- Native topology is exported directly and checked against the property mirror. All 11
+  application tables retain every row and field in paginated files and compressed JSONL.
+### Notes & Caveats
+- This is a full offline corpus, not a leakage-free online evaluation snapshot.
+- Intent embeddings use the pinned Qwen3-Embedding-0.6B checkpoint. Eleven long inputs use
+  the documented 6000-character limit. Full intent text is retained in the relation.
+- Existing BO runs retain their old scorer input. No new downstream quality claim is made.
+
+## [0.13.0] - 2026-10-13
+### Features
+- TriMEM trajectory store v0.2 (`docs/trimem_trajectory_storage_v0.2.0.md`): the EvoTrace loader
+  now loads every relation in the dataset, into a NEW cluster (`scripts/traj_cluster.sh`:
+  `.tridb-pgdata-traj`, port 55450, database `trimem_traj`). Relational tables:
+  - `task`, with 18 task_spec vectors;
+  - `session`;
+  - `attempt`, gaining `framework_changes`, `intent`, `intent_source`, `intent_emb`,
+    `backend`, `program_id`, `generation` and `artifact_sha`;
+  - `prompt` + `prompt_system`, holding full prompt and response text;
+  - `llm_call`, with full content and reasoning, `attempt_id` exact links and a `purpose`;
+  - `search_membership` (run-length intervals), `search_scalar` and `search_checkpoint`;
+  - `edge_prop`, a property mirror and idempotency guard.
+- New native edge types `context` / `context_up` (inspirations shown to the LLM) and
+  `merge_parent` / `merge_parent_up` (gepa Merge Parent B). `lineage`, `similar` and their
+  reverses are kept.
+- `not_selected(attempt_id)` reconstructs the pool at the previous checkpoint, minus the parent
+  and the context sources, which it reads from the native graph.
+- `trimem/data/embed_intent.py` embeds the LLM's stated change intent through the 8011 server.
+### Design Rationale
+- llm_call → attempt is an exact sha1 match of the response text within a session, not a
+  heuristic. Rows that need a heuristic link are left unlinked. Topology is native; properties,
+  text and time are relational.
+- The LLM-derived `changes` is dropped in this store in favour of the agent's own intent.
+### Notes & Caveats
+- The loader refuses ports 5432, 55440 and 55441 and the `.tridb-pgdata-trimem` data
+  directory. Production `trimem_evo` is untouched.
+- The replay code still reads `attempt.changes`, so it stays on 55441.
+
+## [0.12.0] - 2026-10-12
+### Features
+- TriMEM SemExtract (`trimem_pg` 0.3.0, ADR-0028): `trimem.sem_extract(question, input) -> text`
+  answers a question about a text with a short lower-case label, planned as
+  `Custom Scan (TriMEM SemExtract)` like SemScore. Labels feed ordinary relational operators:
+  WHERE label = ... (lifted into the node's own qual), GROUP BY / HAVING, per-label caps with
+  window functions, comparison in an outer query.
+- Placement enumeration covers SemFilter × SemScore × SemExtract (BASE on the extract relation vs
+  TOP above the join, `trimem.force_placement`), cache-coverage-aware cost, label-qual
+  selectivity from the cached label distribution; EXPLAIN shows Placement, Placement Decision,
+  Inputs Extracted, Cache Hits, Worker Requests, Unlabeled, LLM Wait.
+- Worker / LLM: `OP_EXTRACT`, `EXTRACT_PROMPT` + strict `parse_label`, `extract_many` on
+  `OpenAIJudge` and `MockJudge` (deterministic `extract_rule`).
+- Upgrade script `trimem_pg--0.2.0--0.3.0.sql`: `sem_cache.extracted text`, `sem_extract`,
+  `sem_extract_support`, `complete_extracts(slots, seqs)` (REVOKEd from PUBLIC).
+### Design Rationale
+- The mailbox stays numeric: the worker commits the label to `sem_cache` and only signals
+  completion; the node re-reads its keys with the latest snapshot (the worker commits after the
+  query's snapshot). One LLM call per distinct input replaces one `sem_filter` per category.
+### Notes & Caveats
+- `sem_extract` inside a join condition is rejected (v1); compare labels of two relations in an
+  outer query over a MATERIALIZED CTE. Label quals are never placed above an outer join.
+- Unparsable replies return NULL and are not cached, so they are asked again on the next query.
+- Production needs the new `.so` installed and a restart (shared_preload_libraries), then
+  `ALTER EXTENSION trimem_pg UPDATE TO '0.3.0'` in each database.
+
+## [0.11.0] - 2026-10-12
+### Features
+- Objective O4 (v3 space): ĝ/ĝ_ref − 0.1·L̂/L_ref with L̂ = expected LLM inference seconds per valid
+  child, from per-candidate output-token and validity models and a fitted latency law
+  (`trimem/objective/costs.py` joins OpenEvolve telemetry to iterations by prompt hash).
+- Mixed traversal path (similar → lineage, two chained TriMEM Expand nodes) in the graph space
+  (27 configurations, 325 candidates); online models scaled to Var(Δ_best).
+- Workbook `triMEM_optimizer/trimem_experiments.xlsx` holds every plan (fixed, random, A1–A6,
+  B0–B3, C0–C3); the summary page hides the random and v1 arms by default (`--hide`).
+### Design Rationale
+- Input tokens cost almost no time (0.00018 s vs 0.029 s per output token, R² 0.85); penalising
+  them made the optimizers inject too little (docs/trimem_downstream_objective_plan_v0.4.0.md).
+### Notes & Caveats
+- Output-token prediction is weak (LOTO Spearman 0.04–0.59); latency still dominated by the
+  model's output length, which context barely changes.
+
+## [0.10.0] - 2026-10-12
+### Features
+- Downstream-aware plan selection for TriMEM in OpenEvolve (`trimem/objective/`,
+  `bench/agent_memory/gem_oe/trimem_adaptive.py`, `--arm trimem-adaptive`): per-iteration choice of
+  plan family × k (v1) and, in v2, × graph traversal configuration (edge lineage/similar,
+  direction down/up via native reverse edge types, 1/2 chained Expand hops, fanout 4/8/16; 289
+  candidates). Every decision and its child outcome is logged in `trimem_outcome` with propensity.
+- Estimators: hurdle model (calibrated logistic × gradient boosting) as a leave-one-task-out offline
+  prior; Bayesian linear online model (cold / warm start, Thompson sampling); v2 trains a separate
+  "inject nothing" estimator. Objectives O1 (tokens per expected gain), O2 (utility − λ·tokens),
+  O3 (cheapest candidate predicted at least as good as rank:5).
+- OpenEvolve cells can be resumed from a checkpoint into a new directory (`--resume-from`,
+  `oe_matrix --resume-dir`), restoring the adaptive policy state (`policy.pkl`).
+- Summary page `triMEM_optimizer/it20_summary/` (fixed plans to 50 iterations, optimizer section).
+### Design Rationale
+- v2 targets improvement over the run's best (the reported quality) instead of over the sampled
+  parent; v1 arms saved 25–38% tokens but chose "inject nothing" 21–40% of the time and lost
+  1–7% quality (docs/trimem_downstream_objective_plan_v0.3.0.md).
+### Notes & Caveats
+- OpenEvolve's evolution trace drops ~3.5% of children (parent evicted before the child returns);
+  the analysis now merges the checkpoint database. The v1 offline priors were trained before this
+  fix. Single seed (42) so far.
+
+## [0.9.0] - 2026-10-11
+### Features
+- TriMEM (`src/trimem_pg`, `trimem/`): LLM semantic predicates as a planner CustomScan
+  (`TriMEM SemFilter`) and a costed native graph expansion node (`TriMEM Expand`) in one PG plan;
+  cost-based SemFilter placement over joins (every base/top assignment is a full join search);
+  shared-memory mailbox to an out-of-process LLM worker; cache-coverage-aware cost model.
+- trimem_pg 0.2.0 soft semantic operators: `sem_filter(predicate, input, unknown_as)` (keep or
+  drop rows whose input is NULL) and `sem_score(predicate, input)` in [0, 1], planned as
+  `TriMEM SemScore` (batched, cached) so an LLM relevance score can weight an ORDER BY instead of
+  filtering. Replay arms A5 (keep unknown) and A6 (score-weighted rank).
+- EvoTrace loader (attempt table, HNSW, lineage + cross-session similarity graphs) and the
+  plan-choice and end-to-end agent replay experiments (`trimem/experiments`, `trimem/replay`).
+### Design Rationale
+- ADR-0027: the LLM stays out of process, but the semantic step is a real plan node, so the
+  optimizer can cost and place it against vector, graph and relational operators.
+### Notes & Caveats
+- Requires `shared_preload_libraries = 'tjs_pg,trimem_pg'` (order matters). Stock PG16 only; the
+  PG13.4 fork / GX10 build is unbuilt here. The objective does not yet include downstream agent
+  cost (P5); the replay shows that term is material.
+
 ## [0.8.0] - 2026-10-10
 
 ### Features

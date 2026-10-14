@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TriMEM OpenEvolve 20 Iterations</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&family=Fraunces:opsz,wght@9..144,600&display=swap">
+<style>
+:root {
+  --a0: #a3abb8; --a1: #5d6676; --a2: #3d7cc9; --a3: #c4561c; --a4: #8f5bb5; --a5: #2f8f6b; --a6: #b8902a; --a7: #d6336c; --a8: #1098ad; --a9: #5c940d; --a10: #e8590c; --a11: #7048e8; --a12: #0b7285; --a13: #a61e4d; --a14: #495057; --a15: #2b8a3e; --a16: #c92a2a; --a17: #1864ab; --a18: #868e96; --a19: #e67700; --a20: #5f3dc4; --a21: #087f5b; --a22: #e03131; --a23: #1971c2; --a24: #c2255c; --a25: #2f9e44; --a26: #5c7cfa;
+  --bg: #f6f7f9; --panel: #ffffff; --fg: #1b2230; --muted: #5d6676; --line: #d8dde5; --accent: #b4531f;
+  --p-ret: #8a3a0c; --p-con: #1d4f91; --p-gin: #3d7cc9; --p-gout: #9cc0ea; --p-gen: #3d7cc9; --p-eval: #a3abb8; --p-sem: #c4561c;
+  --good: #22693a;
+  --f-display: "Fraunces", Georgia, serif;
+  --f-body: "Atkinson Hyperlegible", "PingFang SC", "Noto Sans CJK SC", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --a0: #6f7787; --a1: #c4cad4; --a2: #6ea6ec; --a3: #e58a55; --a4: #b98be0; --a5: #5fc79c; --a6: #e0bb55; --a7: #f783ac; --a8: #66d9e8; --a9: #a9e34b; --a10: #ffa94d; --a11: #b197fc; --a12: #3bc9db; --a13: #f06595; --a14: #adb5bd; --a15: #69db7c; --a16: #ff8787; --a17: #74c0fc; --a18: #ced4da; --a19: #ffc078; --a20: #b197fc; --a21: #63e6be; --a22: #ff8787; --a23: #74c0fc; --a24: #f783ac; --a25: #8ce99a; --a26: #91a7ff;
+  --bg: #12161d; --panel: #1a2029; --fg: #e6e9ef; --muted: #9aa3b2; --line: #2e3643; --accent: #e58a55;
+  --p-ret: #f6c39f; --p-con: #a9cbf5; --p-gin: #6ea6ec; --p-gout: #2f5f99; --p-gen: #6ea6ec; --p-eval: #5d6676; --p-sem: #e58a55;
+  --good: #7fd197; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --a0: #6f7787; --a1: #c4cad4; --a2: #6ea6ec; --a3: #e58a55; --a4: #b98be0; --a5: #5fc79c; --a6: #e0bb55; --a7: #f783ac; --a8: #66d9e8; --a9: #a9e34b; --a10: #ffa94d; --a11: #b197fc; --a12: #3bc9db; --a13: #f06595; --a14: #adb5bd; --a15: #69db7c; --a16: #ff8787; --a17: #74c0fc; --a18: #ced4da; --a19: #ffc078; --a20: #b197fc; --a21: #63e6be; --a22: #ff8787; --a23: #74c0fc; --a24: #f783ac; --a25: #8ce99a; --a26: #91a7ff;
+  --bg: #12161d; --panel: #1a2029; --fg: #e6e9ef; --muted: #9aa3b2; --line: #2e3643; --accent: #e58a55;
+  --p-ret: #f6c39f; --p-con: #a9cbf5; --p-gin: #6ea6ec; --p-gout: #2f5f99; --p-gen: #6ea6ec; --p-eval: #5d6676; --p-sem: #e58a55;
+  --good: #7fd197; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 var(--f-body); }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 28px 16px 56px; }
+.stack { display: grid; gap: 22px; }
+h1 { font: 600 clamp(26px, 4vw, 36px)/1.15 var(--f-display); margin: 0 0 6px; text-wrap: balance; }
+h2 { font: 600 20px/1.3 var(--f-display); margin: 0 0 10px; }
+.lede { color: var(--muted); max-width: 80ch; margin: 0; }
+.mono { font-family: var(--f-mono); font-size: 12.5px; }
+.note { color: var(--muted); font-family: var(--f-mono); font-size: 12px; margin: 8px 0 0; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; min-width: 0; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font: 700 11.5px var(--f-body); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+th:first-child, td:first-child, td.l { text-align: left; }
+td.win { font-weight: 700; color: var(--accent); }
+.qbar { display: inline-block; height: 8px; border-radius: 2px; background: var(--accent); vertical-align: middle; margin-left: 6px; opacity: .75; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 13px; color: var(--muted); }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+.sw { display: inline-block; width: 14px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.kv div { border-left: 2px solid var(--line); padding-left: 10px; min-width: 0; }
+.kv b { display: block; font: 600 18px var(--f-mono); }
+.kv span { font-size: 12px; color: var(--muted); letter-spacing: .04em; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 18px; }
+.grid2 > * { min-width: 0; }
+.treehead { font: 700 13px var(--f-body); margin: 6px 0 6px; }
+.bars { display: grid; gap: 8px; }
+.brow { display: grid; grid-template-columns: minmax(90px, 170px) 1fr 74px; gap: 10px; align-items: center; font-size: 13px; }
+.stack-bar { display: flex; height: 16px; border-radius: 3px; overflow: hidden; background: color-mix(in srgb, var(--muted) 12%, transparent); }
+.stack-bar span { display: block; height: 100%; }
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.tab { font: 600 13px var(--f-body); border: 1px solid var(--line); background: var(--panel); color: var(--fg); border-radius: 6px; padding: 6px 11px; cursor: pointer; }
+.tab[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.curves { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.curves > div { min-width: 0; }
+svg { width: 100%; height: auto; display: block; }
+svg text { fill: var(--muted); font: 10px var(--f-mono); }
+.big svg text { font-size: 11px; }
+@media (max-width: 560px) { .brow { grid-template-columns: 96px 1fr 60px; font-size: 12px; } }
+</style>
+</head>
+<body>
+<div class="wrap stack">
+  <header class="stack" style="gap:10px">
+    <h1>记忆计划能否改变 agent 的结果？</h1>
+    <p class="lede">OpenEvolve 0.3.2 + TriMEM 离线经验图 · 5 道 EvoTrace 数学任务 × <span id="nplans"></span> 种计划 · 每格 20 次迭代（固定计划续跑到 <span id="nmax"></span> 次）· seed 42 · 生成模型 Qwen3.8-27B-FP8（关闭 thinking）。固定记忆计划把检索到的程序替换进 10 个 inspiration 槽位中的 5 个；新优化器（v2）每次迭代从 289 个候选（不注入，或 24 种图遍历配置 × 三种计划家族 × k ∈ {1,3,5,8}）中选一个，最多替换 8 个槽位；quality = combined_score 的历史最优值。</p>
+    <div class="legend" id="legend"></div>
+  </header>
+
+  <section class="panel"><div class="kv" id="kpis"></div></section>
+
+  <section class="panel">
+    <h2>各计划的 quality 与开销（5 道任务平均）</h2>
+    <div class="tablewrap"><table id="arms"></table></div>
+    <p class="note">@i = 第 i 次迭代时的历史最优（–：该计划还没跑到）。时间/token/有效比例统计的是前 20 次迭代，所有计划都在同一口径下比较。提升 = 第 20 次迭代的最优分数减去种子分数。有效 = combined_score &gt; 0 的子程序比例。构建 = 离线经验图上一次性的 LLM change summary（embedding、HNSW、lineage/similar 边已经存在），所有记忆计划共享，这里按每道任务全额计入。检索 = embedding + SQL，包括 SemFilter/SemScore 的 LLM 等待。生成 = 各次 agent LLM 调用耗时之和（OpenEvolve 会并发发起请求）。</p>
+  </section>
+
+  <section class="panel" id="optsec">
+    <h2 id="opttitle">新优化器（前 20 次迭代）</h2>
+    <p class="lede" style="margin-bottom:12px">每次迭代从 289 个候选里选一个：“不注入”，或 图遍历配置（边类型 lineage/similar × 方向 down/up × 1/2 跳 × fanout 4/8/16，共 24 种）× 计划家族（三模态 / 硬过滤 / 排序加权）× k ∈ {1,3,5,8}。
+      目标 = 相对当前最优的提升 Δ<sub>best</sub>；“不注入”单独建模；目标函数 O3 = 在 ĝ(c) ≥ ĝ(rank:5) 的约束下选 token 最少的候选。
+      B1 = 离线先验（留一任务训练，冻结）；B2 / B3 = 在线贝叶斯线性模型（冷启动 / 用先验热启动），每轮观测到 Δ<sub>best</sub> 后更新，Thompson 采样；都保留 10% 随机探索。每个 arm 最多替换 8 个 inspiration 槽位，跑到第 50 次迭代。<br>
+      <b>C1–C3（v3）</b>：图配置再加 mixed 路径（similar → lineage：先跨会话找相似代码，再看它在那个会话里的成功改进；fanout 4/8/16，共 27 种配置、325 个候选）；
+      目标函数 O4 = ĝ(c)/ĝ(rank:5) − 0.1 · L̂(c)/L̂(rank:5)，L̂ = 每得到一个有效子程序的期望推理秒数 =（a + b·输入 + d·输出 token）/ P̂(valid)，输出 token 与 P̂(valid) 按候选预测；不直接惩罚输入 token。在线模型的先验与噪声按 Δ<sub>best</sub> 的方差缩放。<br>
+      <b>D1–D2（O5，BRANE 形式）</b>：c* = argmax P̂(刷新最优 | c) − λ·Ê[输出 token | c]/1000，成本只计输出 token；λ 按预算 B（该任务 rank 的平均输出 token）做对偶更新：平均输出超过 B 时 λ 增大，低于 B 时回落到 0。先验 = math 决策数据 + 该任务自己的 50 次随机探索；D1 = 离线先验（冻结），D2 = 在线热启动（每轮观测后更新 P̂）。</p>
+    <div class="kv" id="optkpis" style="margin-bottom:16px"></div>
+    <div class="treehead">@20 quality：优化器 vs. 固定计划</div>
+    <div class="tablewrap"><table id="opttable"></table></div>
+    <p class="note">固定计划的最优 = 7 种固定计划中该任务 @20 最好的那个（事后选出的 oracle）；排序加权 = 平均表现最好的单个固定计划。▲/▼ = 优化器相对排序加权的高低。“运行中 @i” = 还没跑完前 20 次迭代。</p>
+    <div class="grid2" style="margin-top:16px">
+      <div><div class="treehead">候选选择分布（全部已记录的决策）</div><div class="tablewrap"><table id="optchoice"></table></div>
+        <p class="note">每格 = 该 arm 选中这个候选的次数占比；颜色越深占比越高。</p>
+        <div class="treehead" style="margin-top:14px">v2：图遍历参数的选择（不含“不注入”）</div><div class="tablewrap"><table id="optgraph"></table></div>
+        <p class="note">边类型 lineage = 成功的父→子编辑，similar = 跨会话 kNN；方向 up = 沿反向边（子→父 / 反向 kNN）；跳数 2 = 两个串联的 TriMEM Expand；fanout = 每个种子的扩展上限。时间轴里的上标：s = similar，↑ = up，² = 2 跳。</p></div>
+      <div><div class="treehead">每次迭代的选择（左 → 右 = 第 1 → 20 次）</div><div id="opttimeline"></div>
+        <div class="legend" id="famlegend" style="margin-top:8px"></div>
+        <p class="note">格子颜色 = 计划家族，数字 = k，空心 = 子程序无效，加粗边框 = 子程序比父程序好（Δ &gt; 0）。</p></div>
+    </div>
+    <div class="treehead" style="margin-top:16px">逐任务曲线：优化器 vs. 排序加权 / 只用自身种群</div>
+    <div class="curves" id="optcurves"></div>
+  </section>
+
+  <section class="panel">
+    <h2>quality 随迭代的变化</h2>
+    <div class="tabs" id="norm"></div>
+    <div class="big" id="avgcurve"></div>
+    <p class="note" id="normnote"></p>
+    <div class="treehead" style="margin-top:14px">逐任务曲线</div>
+    <div class="curves" id="curves"></div>
+  </section>
+
+  <section class="panel">
+    <h2>时间和 token 花在哪里</h2>
+    <div class="tabs" id="opts"></div>
+    <div class="grid2">
+      <div><div class="treehead">各阶段 latency（单格平均）</div><div class="bars" id="lat"></div><div class="legend" id="latlegend" style="margin-top:10px"></div></div>
+      <div><div class="treehead">各阶段 LLM tokens（输入 + 输出，单格平均）</div><div class="bars" id="tok"></div><div class="legend" id="toklegend" style="margin-top:10px"></div></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>quality vs. token 开销</h2>
+    <div class="tabs" id="sctabs"></div>
+    <div id="scatter"></div>
+    <p class="note" id="scnote"></p>
+  </section>
+
+  <section class="panel">
+    <h2>逐任务明细</h2>
+    <div class="tablewrap"><table id="cells"></table></div>
+  </section>
+</div>
+<script>
+const D = __DATA__;
+const T = D.tasks, P = D.plans.filter(p => T.every(t => D.cells.some(c => c.plan === p && c.task === t)));
+const COL = Object.fromEntries(D.plans.map((p, i) => [p, `--a${i}`]));  // stable colour per plan
+const NAME = {nocontext: "无记忆（无参考）", none: "只用自身种群", trimodal: "三模态 V+G+R", rank: "排序加权 · 优化器",
+  "rank-semfirst": "排序加权 · 强制语义优先", "rank-travfirst": "排序加权 · 强制遍历优先",
+  "semfilter-rank": "SemFilter + SemRank",
+  hard: "硬过滤 · 优化器", "hard-semfirst": "硬过滤 · 强制语义优先", "hard-travfirst": "硬过滤 · 强制遍历优先",
+  "adaptive-random": "新优化器 · 随机探索", "adaptive-o1-op": "新优化器 O1 · 离线先验", "adaptive-o1-onc": "新优化器 O1 · 在线冷启动",
+  "adaptive-o1-onw": "新优化器 O1 · 在线热启动", "adaptive-o2-op": "新优化器 O2 · 离线先验", "adaptive-o2-onc": "新优化器 O2 · 在线冷启动",
+  "adaptive-o2-onw": "新优化器 O2 · 在线热启动",
+  "adaptive-v2-random": "v2 · 随机探索（含图参数）", "adaptive-v2-o3-op": "v2 O3 · 离线先验",
+  "adaptive-v2-o3-onc": "v2 O3 · 在线冷启动", "adaptive-v2-o3-onw": "v2 O3 · 在线热启动",
+  "adaptive-v3-random": "v3 · 随机探索（含 mixed）", "adaptive-v3-o4-op": "v3 O4 · 离线先验",
+  "adaptive-v3-o4-onc": "v3 O4 · 在线冷启动", "adaptive-v3-o4-onw": "v3 O4 · 在线热启动",
+  "adaptive-v3-o5-op": "O5 · 离线先验", "adaptive-v3-o5-onw": "O5 · 在线热启动"};
+const fmt = (x, d = 0) => x == null ? "–" : Number(x).toLocaleString("en-US", {maximumFractionDigits: d, minimumFractionDigits: d});
+const k = n => n >= 1e6 ? fmt(n / 1e6, 2) + "M" : n >= 1e4 ? fmt(n / 1e3, 0) + "k" : fmt(n);
+const sec = ms => ms >= 60000 ? fmt(ms / 60000, 1) + " min" : fmt(ms / 1000, 1) + " s";
+const mean = a => a.reduce((s, x) => s + x, 0) / a.length;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const cell = (p, t) => D.cells.find(c => c.plan === p && c.task === t);
+const N = Math.max(...D.cells.map(c => c.curve.length - 1));            // longest horizon on the page
+const CK = [10, 20, 30, 40, 50].filter(i => i <= N);
+const horizon = p => Math.min(...T.map(t => cell(p, t).curve.length - 1));  // a plan's common horizon
+const qAt = (c, i) => i < c.curve.length ? c.curve[i] : null;
+const taskBest = Object.fromEntries(T.map(t => [t, Math.max(...P.map(p => cell(p, t).curve[20]))]));
+const bestAt = (t, i) => Math.max(...P.map(p => qAt(cell(p, t), i) ?? -Infinity));
+const A = Object.fromEntries(P.map(p => {
+  const cs = T.map(t => cell(p, t));
+  const m = f => mean(cs.map(f));
+  const h = horizon(p);
+  return [p, {q10: m(c => c.curve[10]), q20: m(c => c.curve[20]), h,
+    qs: Object.fromEntries(CK.map(i => [i, i <= h ? m(c => c.curve[i]) : null])), gain: m(c => c.curve[20] - c.seed), valid: m(c => c.valid / 20),
+    wins: T.filter(t => cell(p, t).curve[20] >= taskBest[t] - 1e-9).length,
+    gin: m(c => c.gen_in), gout: m(c => c.gen_out), sem: m(c => c.sem_tok), ctok: m(c => c.cons_tok),
+    gen: m(c => c.gen_ms), ret: m(c => c.ret_ms), con: m(c => c.cons_wall_ms), ev: m(c => c.eval_ms),
+    // cumulative over iterations 1..50 (fixed plans continued to 50); null until every task has it
+    c50: cs.every(c => c.cost50) ? {q: m(c => c.curve[50]), valid: m(c => c.cost50.valid / 50),
+      tok: m(c => c.cost50.gen_in + c.cost50.gen_out + c.cost50.sem_tok),
+      wins: T.filter(t => cell(p, t).curve[50] >= bestAt(t, 50) - 1e-9).length} : null}];
+}));
+
+document.getElementById("nplans").textContent = P.length;
+document.getElementById("nmax").textContent = N;
+document.getElementById("legend").innerHTML = P.map(p => `<span><i class="dot" style="background:var(${COL[p]})"></i>${NAME[p]}</span>`).join("");
+
+const tot = p => A[p].gin + A[p].gout + A[p].sem;
+// view of a plan at horizon h: 20 = first 20 iterations (every plan), 50 = continued fixed plans
+const view = (p, h) => h === 50 ? (A[p].c50 && {q: A[p].c50.q, valid: A[p].c50.valid, tok: A[p].c50.tok, wins: A[p].c50.wins})
+                                 : {q: A[p].q20, valid: A[p].valid, tok: tot(p), wins: A[p].wins};
+const HZ = P.some(p => A[p].c50) ? [50, 20] : [20];
+const HN = HZ[0], PH = P.filter(p => view(p, HN));
+const best = PH.reduce((a, b) => view(b, HN).q > view(a, HN).q ? b : a);
+const vb = view(best, HN), vn = view("none", HN);
+document.getElementById("kpis").innerHTML = [
+  [fmt(vb.q, 4), `@${HN} 平均 quality 最高：${NAME[best]}`],
+  [fmt(vn.q, 4), `@${HN} 只用自身种群（无外部记忆）`],
+  [`${fmt(100 * vb.valid)}% / ${fmt(100 * vn.valid)}%`, `有效子程序比例（前 ${HN} 次迭代）：最优计划 / 只用自身种群`],
+  [`${k(vb.tok)} / ${k(vn.tok)}`, `单格 tokens（前 ${HN} 次迭代，生成 + 语义检索）：最优计划 / 只用自身种群`],
+  [`${view("trimodal", HN).wins + view("rank", HN).wins} / ${T.length * 2}`, `@${HN} 三模态 + 排序加权拿到最优的任务数`],
+].map(([b, s]) => `<div><b>${b}</b><span>${s}</span></div>`).join("");
+
+// summary table
+const maxAt = Object.fromEntries(CK.map(i => [i, Math.max(...P.map(p => A[p].qs[i] ?? -Infinity))]));
+document.getElementById("arms").innerHTML = `<thead><tr><th>计划</th>${CK.map(i => `<th>@${i} quality</th>`).join("")}<th>提升 @20</th><th>最优任务</th><th>有效</th>
+  <th>构建时间</th><th>构建 tok</th><th>检索时间</th><th>检索 tok</th><th>生成时间</th><th>生成输入 tok</th><th>生成输出 tok</th>${HZ.includes(50) ? "<th>有效 @50</th><th>总 tok @50</th>" : ""}</tr></thead><tbody>` +
+  P.map(p => { const x = A[p];
+    return `<tr><td class="l"><i class="dot" style="background:var(${COL[p]})"></i>${NAME[p]}</td>
+    ${CK.map(i => x.qs[i] == null ? "<td>–</td>" : `<td class="${x.qs[i] === maxAt[i] ? "win" : ""}">${fmt(x.qs[i], 4)}${i === CK[CK.length - 1] || (x.qs[i + 10] == null && i >= 20) ? `<span class="qbar" style="width:${50 * x.qs[i] / maxAt[i]}px"></span>` : ""}</td>`).join("")}
+    <td>+${fmt(x.gain, 4)}</td><td>${x.wins} / ${T.length}</td><td>${fmt(100 * x.valid)}%</td>
+    <td>${x.con ? sec(x.con) : "–"}</td><td>${x.ctok ? k(x.ctok) : "–"}</td><td>${x.ret ? sec(x.ret) : "–"}</td><td>${x.sem ? k(x.sem) : "–"}</td>
+    <td>${sec(x.gen)}</td><td>${k(x.gin)}</td><td>${k(x.gout)}</td>${HZ.includes(50) ? (x.c50 ? `<td>${fmt(100 * x.c50.valid)}%</td><td>${k(x.c50.tok)}</td>` : "<td>–</td><td>–</td>") : ""}</tr>`; }).join("") + "</tbody>";
+
+// curves
+function chart(series, {W = 300, H = 170, lo, hi, n = N + 1, ylab = 3} = {}) {
+  const L = 46, B = 22;
+  const x = i => L + (W - L - 10) * i / (n - 1), y = v => 8 + (H - B - 8) * (1 - (v - lo) / ((hi - lo) || 1));
+  const grid = [0, .25, .5, .75, 1].map(f => lo + f * (hi - lo)).map(v => `<line x1="${L}" x2="${W - 10}" y1="${y(v)}" y2="${y(v)}" style="stroke:var(--line)"/><text x="${L - 5}" y="${y(v) + 3.5}" text-anchor="end">${fmt(v, ylab)}</text>`).join("");
+  const ticks = Array.from({length: Math.floor((n - 1) / (n > 21 ? 10 : 5)) + 1}, (_, j) => j * (n > 21 ? 10 : 5)).map(i => `<text x="${x(i)}" y="${H - 6}" text-anchor="middle">${i}</text>`).join("");
+  const lines = series.map(s => `<polyline fill="none" style="stroke:var(${s.col})" stroke-width="${s.w || 2}" stroke-linejoin="round" points="${s.v.map((v, i) => x(i).toFixed(1) + "," + y(v).toFixed(1)).join(" ")}"><title>${esc(s.name)}</title></polyline>`).join("");
+  const mark = CK.filter(i => i < n - 1).map(i => `<line x1="${x(i)}" x2="${x(i)}" y1="8" y2="${H - B}" style="stroke:var(--muted)" stroke-dasharray="3 3" opacity=".45"/>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="best score per iteration">${grid}${mark}${lines}${ticks}</svg>`;
+}
+let mode = "raw";
+const MODES = [["raw", "原始 quality 的平均"], ["norm", "按任务归一化后的平均"]];
+function drawAvg() {
+  const val = (c, i) => mode === "raw" ? c.curve[i] : (c.curve[i] - c.seed) / ((bestAt(c.task, N) - c.seed) || 1);
+  const series = P.map(p => ({col: COL[p], name: NAME[p], w: ["trimodal", "rank"].includes(p) ? 3 : 1.8,
+    v: Array.from({length: horizon(p) + 1}, (_, i) => mean(T.map(t => val(cell(p, t), i))))}));
+  const all = series.flatMap(s => s.v);
+  document.getElementById("avgcurve").innerHTML = chart(series, {W: 760, H: 300, lo: Math.min(...all), hi: Math.max(...all)});
+  document.getElementById("normnote").textContent = (mode === "raw"
+    ? "y = 5 道任务历史最优 combined_score 的平均；第 0 次迭代 = 种子程序。"
+    : `y = (best − 种子) / (该任务所有计划在第 ${N} 次迭代时的最好成绩 − 种子)，再对 5 道任务平均：1 = 达到该任务的最优计划。`) + ` 虚线 = 第 ${CK.join("/")} 次迭代。`;
+  document.querySelectorAll("#norm .tab").forEach(b => b.setAttribute("aria-pressed", b.dataset.m === mode));
+}
+document.getElementById("norm").innerHTML = MODES.map(([m, l]) => `<button class="tab" data-m="${m}">${l}</button>`).join("");
+document.querySelectorAll("#norm .tab").forEach(b => b.onclick = () => { mode = b.dataset.m; drawAvg(); });
+drawAvg();
+document.getElementById("curves").innerHTML = T.map(t => {
+  const series = P.map(p => ({col: COL[p], name: NAME[p], v: cell(p, t).curve}));
+  const all = series.flatMap(s => s.v);
+  return `<div><div class="treehead">${esc(t)}</div>${chart(series, {lo: Math.min(...all), hi: Math.max(...all)})}</div>`;
+}).join("");
+
+// phase bars
+const opt = {con: true, ev: false};
+function bars(id, legendId, parts, unit) {
+  const vals = P.map(p => parts.map(([, , f]) => f(A[p])));
+  const tots = vals.map(v => v.reduce((a, b) => a + b, 0)), max = Math.max(...tots);
+  document.getElementById(id).innerHTML = P.map((p, i) => `<div class="brow"><span><i class="dot" style="background:var(${COL[p]})"></i>${NAME[p]}</span><span class="stack-bar">` +
+    vals[i].map((v, j) => `<span title="${parts[j][0]}: ${unit(v)}" style="width:${100 * v / max}%;background:var(${parts[j][1]})"></span>`).join("") +
+    `</span><span class="mono">${unit(tots[i])}</span></div>`).join("");
+  document.getElementById(legendId).innerHTML = parts.map(([n, c]) => `<span><i class="sw" style="background:var(${c})"></i>${n}</span>`).join("");
+}
+function drawBars() {
+  bars("lat", "latlegend", [
+    ...(opt.con ? [["构建（一次性）", "--p-con", x => x.con]] : []),
+    ["检索", "--p-ret", x => x.ret], ["生成", "--p-gen", x => x.gen],
+    ...(opt.ev ? [["评测", "--p-eval", x => x.ev]] : [])], sec);
+  bars("tok", "toklegend", [
+    ...(opt.con ? [["构建（一次性）", "--p-con", x => x.ctok]] : []),
+    ["语义检索", "--p-sem", x => x.sem], ["生成输入", "--p-gin", x => x.gin], ["生成输出", "--p-gout", x => x.gout]], k);
+  document.querySelectorAll("#opts .tab").forEach(b => b.setAttribute("aria-pressed", opt[b.dataset.o]));
+}
+document.getElementById("opts").innerHTML = [["con", "计入一次性构建"], ["ev", "计入评测时间"]].map(([o, l]) => `<button class="tab" data-o="${o}">${l}</button>`).join("");
+document.querySelectorAll("#opts .tab").forEach(b => b.onclick = () => { opt[b.dataset.o] = !opt[b.dataset.o]; drawBars(); });
+drawBars();
+
+// scatter
+let sh = HN;
+function drawScatter() {
+  const W = 760, H = 300, L = 56, B = 30;
+  const PS = P.filter(p => view(p, sh));
+  const xs = PS.map(p => view(p, sh).tok), ys = PS.map(p => view(p, sh).q);
+  const x0 = 0, x1 = Math.max(...xs) * 1.08, y0 = Math.min(...ys) - .03, y1 = Math.max(...ys) + .03;
+  const x = v => L + (W - L - 16) * (v - x0) / (x1 - x0), y = v => 10 + (H - B - 10) * (1 - (v - y0) / (y1 - y0));
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="quality vs tokens">`;
+  for (let i = 0; i <= 4; i++) { const v = y0 + i * (y1 - y0) / 4; s += `<line x1="${L}" x2="${W - 16}" y1="${y(v)}" y2="${y(v)}" style="stroke:var(--line)"/><text x="${L - 6}" y="${y(v) + 3.5}" text-anchor="end">${fmt(v, 3)}</text>`; }
+  for (let i = 0; i <= 4; i++) { const v = x0 + i * (x1 - x0) / 4; s += `<text x="${x(v)}" y="${H - 8}" text-anchor="middle">${k(v)}</text>`; }
+  PS.forEach((p, i) => {
+    const cx = x(xs[i]), cy = y(ys[i]), right = cx < W - 200;
+    s += `<circle cx="${cx}" cy="${cy}" r="7" style="fill:var(${COL[p]})"><title>${esc(NAME[p])}: ${k(xs[i])} tok, ${fmt(ys[i], 4)}</title></circle>
+      <text x="${cx + (right ? 11 : -11)}" y="${cy + 4}" text-anchor="${right ? "start" : "end"}" style="fill:var(--fg);font-size:11.5px">${esc(NAME[p])}</text>`;
+  });
+  document.getElementById("scatter").innerHTML = s + "</svg>";
+  document.getElementById("scnote").textContent = `x = 单格平均的生成 tokens + 语义检索 tokens（前 ${sh} 次迭代累计）；y = 第 ${sh} 次迭代的平均 quality。越靠左上越好。` +
+    (sh === 50 ? " 只包含已经跑满 50 次的计划。" : "");
+  document.querySelectorAll("#sctabs .tab").forEach(b => b.setAttribute("aria-pressed", +b.dataset.h === sh));
+}
+document.getElementById("sctabs").innerHTML = HZ.map(h => `<button class="tab" data-h="${h}">第 ${h} 次迭代</button>`).join("");
+document.querySelectorAll("#sctabs .tab").forEach(b => b.onclick = () => { sh = +b.dataset.h; drawScatter(); });
+drawScatter();
+
+// per-task table
+document.getElementById("cells").innerHTML = `<thead><tr><th>任务</th><th>计划</th><th>种子</th>${CK.map(i => `<th>@${i}</th>`).join("")}<th>有效 @20</th><th>检索时间</th><th>检索 tok</th><th>生成时间</th><th>生成 tok</th><th>评测时间</th></tr></thead><tbody>` +
+  T.flatMap(t => P.map(p => { const c = cell(p, t);
+    return `<tr><td class="l">${esc(t)}</td><td class="l"><i class="dot" style="background:var(${COL[p]})"></i>${NAME[p]}</td><td>${fmt(c.seed, 4)}</td>${CK.map(i => { const v = qAt(c, i); return v == null ? "<td>–</td>" : `<td class="${v >= bestAt(t, i) - 1e-9 ? "win" : ""}">${fmt(v, 4)}</td>`; }).join("")}<td>${c.valid}/20</td><td>${c.ret_ms ? sec(c.ret_ms) : "–"}</td><td>${c.sem_tok ? k(c.sem_tok) : "–"}</td>
+    <td>${sec(c.gen_ms)}</td><td>${k(c.gen_in + c.gen_out)}</td><td>${sec(c.eval_ms)}</td></tr>`; })).join("") + "</tbody>";
+
+// ---------------- optimizer section ----------------
+(() => {
+  const hasV1 = D.plans.some(p => /^adaptive-o[12]-/.test(p));
+  const hasV3 = D.plans.some(p => p.startsWith("adaptive-v3-o4"));
+  const hasO5 = D.plans.some(p => p.startsWith("adaptive-v3-o5"));
+  document.getElementById("opttitle").textContent = (hasV1 ? "新优化器：A1–A6（v1）、B1–B3（v2）" : "新优化器：B1–B3（v2）") + (hasV3 ? "、C1–C3（v3）" : "") + (hasO5 ? "、D1–D2（O5）" : "") + "（前 20 次迭代）";
+  const O = D.optimizer || {status: {}, decisions: []};
+  const ARMS = ["adaptive-o1-op", "adaptive-o1-onc", "adaptive-o1-onw", "adaptive-o2-op", "adaptive-o2-onc", "adaptive-o2-onw",
+    "adaptive-v2-o3-op", "adaptive-v2-o3-onc", "adaptive-v2-o3-onw",
+    "adaptive-v3-o4-op", "adaptive-v3-o4-onc", "adaptive-v3-o4-onw",
+    "adaptive-v3-o5-op", "adaptive-v3-o5-onw"].filter(a => D.plans.includes(a));
+  const TAG = {"adaptive-o1-op": "A1", "adaptive-o1-onc": "A2", "adaptive-o1-onw": "A3", "adaptive-o2-op": "A4", "adaptive-o2-onc": "A5", "adaptive-o2-onw": "A6",
+    "adaptive-v2-o3-op": "B1", "adaptive-v2-o3-onc": "B2", "adaptive-v2-o3-onw": "B3", "adaptive-v2-random": "B0", "adaptive-random": "R",
+    "adaptive-v3-o4-op": "C1", "adaptive-v3-o4-onc": "C2", "adaptive-v3-o4-onw": "C3", "adaptive-v3-random": "C0",
+    "adaptive-v3-o5-op": "D1", "adaptive-v3-o5-onw": "D2"};
+  const ACOL = Object.fromEntries(ARMS.map(a => [a, COL[a]]));
+  const FIXED = ["nocontext", "none", "trimodal", "rank", "hard", "hard-semfirst", "hard-travfirst"];
+  const any = (p, t) => D.cells.find(c => c.plan === p && c.task === t);
+  const st = (a, t) => O.status[`${t}__${a}__s${D.seed}`] || {phase: "queued", iteration: 0};
+  const fixedBest = t => Math.max(...FIXED.map(p => any(p, t)?.curve[20] ?? -Infinity));
+  const show = (a, t) => { const c = any(a, t); if (c) return c; return null; };
+  // table
+  let h = `<thead><tr><th>arm</th>${T.map(t => `<th>${esc(t)}</th>`).join("")}<th>已完成任务的平均</th><th>≥ 排序加权</th><th>tok / 格</th><th>有效</th></tr></thead><tbody>`;
+  const refRow = (label, val, col) => `<tr><td class="l"><i class="dot" style="background:var(${col})"></i>${label}</td>${T.map(t => `<td>${val(t) == null ? "–" : fmt(val(t), 4)}</td>`).join("")}<td>${fmt(mean(T.map(val).filter(v => v != null)), 4)}</td><td></td><td></td><td></td></tr>`;
+  h += refRow("固定计划的最优（oracle）", fixedBest, "--muted");
+  h += refRow(NAME.rank, t => any("rank", t)?.curve[20], COL.rank || "--a3");
+  h += refRow(NAME.none, t => any("none", t)?.curve[20], COL.none || "--a1");
+  for (const r of ["adaptive-random", "adaptive-v2-random", "adaptive-v3-random"].filter(a => D.plans.includes(a)))
+    h += refRow(NAME[r], t => any(r, t)?.curve[20] ?? null, COL[r]);
+  for (const a of ARMS) {
+    const done = T.map(t => show(a, t)).filter(Boolean);
+    const cellsHtml = T.map(t => { const c = show(a, t); const s = st(a, t);
+      if (!c) return `<td class="mono" style="color:var(--muted)">${s.phase === "queued" ? "排队" : `运行中 @${s.iteration}`}</td>`;
+      const r = any("rank", t)?.curve[20]; const v = c.curve[20];
+      const mark = r == null ? "" : v > r + 1e-9 ? ' <span style="color:var(--good)">▲</span>' : v < r - 1e-9 ? ' <span style="color:var(--accent)">▼</span>' : " =";
+      return `<td class="${v >= fixedBest(t) - 1e-9 ? "win" : ""}">${fmt(v, 4)}${mark}</td>`; }).join("");
+    const ge = done.filter(c => c.curve[20] >= (any("rank", c.task)?.curve[20] ?? Infinity) - 1e-9).length;
+    h += `<tr><td class="l"><i class="dot" style="background:var(${ACOL[a]})"></i>${TAG[a]} · ${NAME[a].replace("新优化器 ", "")}</td>${cellsHtml}
+      <td>${done.length ? fmt(mean(done.map(c => c.curve[20])), 4) + ` <span class="mono" style="color:var(--muted)">(${done.length}/5)</span>` : "–"}</td>
+      <td>${done.length ? `${ge} / ${done.length}` : "–"}</td>
+      <td>${done.length ? k(mean(done.map(c => c.gen_in + c.gen_out + c.sem_tok))) : "–"}</td>
+      <td>${done.length ? fmt(100 * mean(done.map(c => c.valid / 20))) + "%" : "–"}</td></tr>`;
+  }
+  document.getElementById("opttable").innerHTML = h + "</tbody>";
+  // KPIs
+  const finished = ARMS.flatMap(a => T.map(t => show(a, t)).filter(Boolean));
+  const decs = O.decisions.filter(d => ARMS.some(a => d.cell.includes(`__${a}__`)) && d.it <= 20);
+  const rankTok = mean(T.map(t => any("rank", t)).filter(Boolean).map(c => c.gen_in + c.gen_out + c.sem_tok));
+  document.getElementById("optkpis").innerHTML = [
+    [`${finished.length} / ${ARMS.length * T.length}`, "已跑完前 20 次迭代的优化器格子"],
+    [`${decs.length}`, "已记录的优化器决策（含运行中）"],
+    [decs.length ? fmt(100 * mean(decs.filter(d => (d.delta_best ?? d.delta) != null).map(d => (d.delta_best ?? d.delta) > 0 ? 1 : 0))) + "%" : "–", "优化器决策刷新当前最优（Δ_best > 0）的比例"],
+    [finished.length ? `${k(mean(finished.map(c => c.gen_in + c.gen_out + c.sem_tok)))} / ${k(rankTok)}` : "–", "单格 tokens @20：优化器（已完成）/ 排序加权"],
+  ].map(([b, s]) => `<div><b>${b}</b><span>${s}</span></div>`).join("");
+  // choice distribution
+  const CANDS = ["none:0", ...["trimodal", "hard", "rank"].flatMap(f => [1, 3, 5, 8].map(k => `${f}:${k}`))];
+  const FAMC = {none: "--a1", trimodal: "--a2", hard: "--a4", rank: "--a3"};
+  let ch = `<thead><tr><th>arm</th>${CANDS.map(c => `<th style="padding:4px">${c.replace("trimodal", "tri").replace(":", " ")}</th>`).join("")}<th>n</th></tr></thead><tbody>`;
+  const fk = d => d.cand.split("@")[0];
+  for (const a of [...["adaptive-random", "adaptive-v2-random", "adaptive-v3-random"].filter(a => D.plans.includes(a)), ...ARMS]) {
+    const ds = O.decisions.filter(d => d.cell.includes(`__${a}__`) && d.it <= 20);
+    if (!ds.length) continue;
+    ch += `<tr><td class="l">${TAG[a]}</td>` + CANDS.map(c => {
+      const f = ds.filter(d => fk(d) === c).length / ds.length, fam = c.split(":")[0];
+      return `<td style="padding:4px;text-align:center;background:color-mix(in srgb, var(${FAMC[fam]}) ${Math.round(85 * f)}%, transparent)" title="${c}: ${fmt(100 * f)}%">${f ? fmt(100 * f) : ""}</td>`;
+    }).join("") + `<td>${ds.length}</td></tr>`;
+  }
+  document.getElementById("optchoice").innerHTML = ch + "</tbody>";
+  // v2 graph-configuration choices
+  let gh = `<thead><tr><th>arm</th><th>similar</th><th>mixed</th><th>up</th><th>2 跳</th><th>fanout 4</th><th>8</th><th>16</th><th>n</th></tr></thead><tbody>`;
+  for (const a of ["adaptive-v2-random", "adaptive-v2-o3-op", "adaptive-v2-o3-onc", "adaptive-v2-o3-onw",
+                   "adaptive-v3-random", "adaptive-v3-o4-op", "adaptive-v3-o4-onc", "adaptive-v3-o4-onw",
+                   "adaptive-v3-o5-op", "adaptive-v3-o5-onw"].filter(a => D.plans.includes(a))) {
+    const gs = O.decisions.filter(d => d.cell.includes(`__${a}__`) && d.it <= 20 && d.cand.includes("@")).map(d => d.cand.split("@")[1].split("/"));
+    if (!gs.length) continue;
+    const pc = f => fmt(100 * gs.filter(f).length / gs.length) + "%";
+    gh += `<tr><td class="l">${TAG[a]}</td><td>${pc(g => g[0] === "similar")}</td><td>${pc(g => g[0] === "mixed")}</td><td>${pc(g => g[1] === "up")}</td><td>${pc(g => g[2] === "2")}</td><td>${pc(g => g[3] === "4")}</td><td>${pc(g => g[3] === "8")}</td><td>${pc(g => g[3] === "16")}</td><td>${gs.length}</td></tr>`;
+  }
+  document.getElementById("optgraph").innerHTML = gh + "</tbody>";
+  // timeline
+  const FAMN = {none: "不注入", trimodal: "三模态", hard: "硬过滤", rank: "排序加权"};
+  document.getElementById("famlegend").innerHTML = Object.entries(FAMC).map(([f, c]) => `<span><i class="sw" style="background:var(${c})"></i>${FAMN[f]}</span>`).join("");
+  let tl = "";
+  for (const t of T) {
+    tl += `<div class="treehead" style="margin-top:8px">${esc(t)}</div>`;
+    for (const a of ARMS) {
+      const ds = O.decisions.filter(d => d.cell === `${t}__${a}__s${D.seed}` && d.it <= 20);
+      if (!ds.length) continue;
+      const sq = Array.from({length: 20}, (_, i) => {
+        const d = ds.find(x => x.it === i + 1);
+        if (!d) return `<span style="display:inline-block;width:16px;height:16px;margin:1px;border:1px dashed var(--line)"></span>`;
+        const [fam, kk] = fk(d).split(":"), c = FAMC[fam], gname = d.cand.split("@")[1] || "";
+        const gmark = gname ? gname.split("/").map((v, j) => j === 0 ? (v === "similar" ? "s" : v === "mixed" ? "m" : "") : j === 1 ? (v === "up" ? "↑" : "") : j === 2 ? (v === "2" ? "²" : "") : "").join("") : "";
+        const fill = d.valid === false ? "transparent" : `var(${c})`;
+        return `<span title="it ${d.it}: ${d.cand}, Δ=${d.delta == null ? "?" : fmt(d.delta, 4)}" style="display:inline-block;width:16px;height:16px;margin:1px;border-radius:2px;background:${fill};border:${d.delta > 0 ? "2px solid var(--fg)" : `1px solid var(${c})`};font:9px/14px var(--f-mono);text-align:center;color:${d.valid === false ? `var(${c})` : "#fff"}">${kk === "0" ? "" : kk}${gmark ? `<sup style="font-size:7px">${gmark}</sup>` : ""}</span>`;
+      }).join("");
+      tl += `<div style="display:flex;align-items:center;gap:6px;flex-wrap:nowrap;overflow-x:auto"><span class="mono" style="width:26px">${TAG[a]}</span><span style="white-space:nowrap">${sq}</span></div>`;
+    }
+  }
+  document.getElementById("opttimeline").innerHTML = tl || '<p class="note">还没有决策记录。</p>';
+  // curves
+  document.getElementById("optcurves").innerHTML = T.map(t => {
+    const series = [...["none", "rank", "adaptive-random", "adaptive-v2-random"].filter(p => D.plans.includes(p)).map(p => any(p, t) && {col: COL[p] || "--muted", name: NAME[p], w: 1.4, v: any(p, t).curve.slice(0, 21)}),
+      ...ARMS.map(a => show(a, t) && {col: ACOL[a], name: `${TAG[a]} ${NAME[a]}`, w: 2.4, v: show(a, t).curve.slice(0, 21)})].filter(Boolean);
+    if (!series.length) return "";
+    const all = series.flatMap(s => s.v);
+    return `<div><div class="treehead">${esc(t)}</div>${chart(series, {lo: Math.min(...all), hi: Math.max(...all), n: 21})}</div>`;
+  }).join("");
+  document.getElementById("optcurves").insertAdjacentHTML("afterend", `<div class="legend" style="margin-top:8px">${ARMS.map(a => `<span><i class="dot" style="background:var(${ACOL[a]})"></i>${TAG[a]} ${NAME[a].replace("新优化器 ", "")}</span>`).join("")}<span><i class="dot" style="background:var(${COL.rank})"></i>${NAME.rank}</span><span><i class="dot" style="background:var(${COL.none})"></i>${NAME.none}</span>${["adaptive-random", "adaptive-v2-random"].filter(p => D.plans.includes(p)).map(p => `<span><i class="dot" style="background:var(${COL[p]})"></i>${NAME[p]}</span>`).join("")}</div>`);
+})();
+</script>
+</body>
+</html>

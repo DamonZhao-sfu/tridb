@@ -1,0 +1,6 @@
+### Inspiration {program_number}
+Intent: {intent}
+
+```{language}
+{program_snippet}
+```
