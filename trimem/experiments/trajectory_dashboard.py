@@ -38,14 +38,18 @@ def render(data, html_path, historical_best_path):
         {"cells": visible, "history": history, "tasks": TASKS}, ensure_ascii=False
     ).replace("<", "\\u003c")
     section = START + TEMPLATE.replace("__PAYLOAD__", payload) + END
-    text = html_path.read_text()
-    if START in text and END in text:
-        text = text[: text.index(START)] + section + text[text.index(END) + len(END) :]
-    else:
-        text = text.replace("</body>", section + "\n</body>")
-    temp = html_path.with_name(html_path.name + ".trajectory.tmp")
-    temp.write_text(text)
-    temp.replace(html_path)
+    import fcntl
+
+    with html_path.with_suffix(".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        text = html_path.read_text()
+        if START in text and END in text:
+            text = text[: text.index(START)] + section + text[text.index(END) + len(END) :]
+        else:
+            text = text.replace("</body>", section + "\n</body>")
+        temp = html_path.with_name(html_path.name + ".trajectory.tmp")
+        temp.write_text(text)
+        temp.replace(html_path)
 
 
 TEMPLATE = r"""

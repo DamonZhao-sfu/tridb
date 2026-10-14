@@ -1,17 +1,63 @@
 {
   "default_code_branch": "experiment-trajectory-retrieval-v4",
   "entrypoint": "trimem.experiments.math_trajectory_extend",
-  "tasks": ["heilbronn_convex_13", "second_autocorr_ineq", "heilbronn_triangle", "circle_packing"],
-  "plans": ["VGR", "SemRankOnly", "P1", "P2"],
+  "tasks": [
+    "heilbronn_convex_13",
+    "second_autocorr_ineq",
+    "heilbronn_triangle",
+    "circle_packing"
+  ],
+  "plans": [
+    "VGR",
+    "SemRankOnly",
+    "P1",
+    "P2"
+  ],
   "seed": 42,
   "stage20_barrier": "all four tasks and four plans must finish 20 iterations before any continuation",
   "final_iteration": 50,
-  "checkpoints": [10, 20, 30, 40, 50],
+  "checkpoints": [
+    10,
+    20,
+    30,
+    40,
+    50
+  ],
   "max_parallel": 6,
   "inspiration_programs": 4,
   "inspiration_token_budget": 16384,
   "full_input_token_budget": 32768,
   "generation_output_token_budget": 32768,
   "thinking": false,
-  "historical_reference": "best valid fitness in the frozen imported trajectory corpus"
+  "historical_reference": "best valid fitness in the frozen imported trajectory corpus",
+  "ale": {
+    "entrypoint": "trimem.experiments.ale_trajectory_run",
+    "tasks": [
+      "ahc008",
+      "ahc011",
+      "ahc024",
+      "ahc025",
+      "ahc026"
+    ],
+    "start_after": "all four Math tasks \u00d7 four plans complete50",
+    "checkpoints": [
+      10,
+      20,
+      30,
+      40,
+      50
+    ],
+    "stage_iterations": 10,
+    "max_parallel": 6,
+    "public_cases": 50,
+    "public_workers": 1,
+    "private_workers": 4,
+    "private_concurrency": 1,
+    "private_cpu_reservation": 4,
+    "language": "cpp",
+    "eval_timeout_seconds": 600,
+    "simplify_nudge": false,
+    "diff_match": "exact",
+    "private_selection": "public-best at exact checkpoint, no private feedback"
+  }
 }

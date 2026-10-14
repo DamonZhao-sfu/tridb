@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.13.9] - 2026-10-13
+### Features
+- Queue AHC008, AHC011, AHC024, AHC025 and AHC026 behind completion of all Math
+  trajectory runs at iteration 50, using VGR, SemRankOnly, P1 and P2.
+- Save and resume exact ten-round checkpoints, independently evaluate each public-selected
+  winner on the held-out private set, and retain score, rank, performance and seed-relative change.
+- Add task-selectable Math/ALE quality curves and cumulative quality/token scatter plots
+  to the existing HTML dashboard, with checkpoint-aligned generation and semantic API usage.
+### Design Rationale
+- Private outcomes are reporting-only and never inform program selection or agent feedback.
+  Separate stage directories preserve provenance and prevent future checkpoint leakage.
+### Notes & Caveats
+- Token accounting includes observed API retries. Missing or ambiguous ownership is marked
+  partial rather than charged twice. Unobserved private outcomes remain pending.
+- Private evaluation uses cached ALE-Bench Lite held-out cases. These are single-seed runs.
+
 ## [0.13.8] - 2026-10-13
 ### Features
 - Added circle packing to the four-task comparison, a fixed historical-best dashed reference,
