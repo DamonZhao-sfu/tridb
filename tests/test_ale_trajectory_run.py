@@ -86,6 +86,7 @@ def test_math_barrier_requires_all_cells_and_supervisor_finalization(
     monkeypatch, tmp_path
 ):
     monkeypatch.setattr(ale.math_run, "OUT", tmp_path)
+    monkeypatch.setattr(ale, "OUT", tmp_path)
     monkeypatch.setattr(
         ale.math_run, "cells", lambda: [("task", "VGR", "one"), ("task", "P1", "two")]
     )
@@ -93,6 +94,21 @@ def test_math_barrier_requires_all_cells_and_supervisor_finalization(
         ale.math_run, "complete_cell", lambda path, _: path.name == "one"
     )
     (tmp_path / "status.json").write_text('{"status":"complete"}')
+    assert not ale.math_barrier()["passed"]
+    monkeypatch.setattr(ale.math_run, "complete_cell", lambda *_: True)
+    assert ale.math_barrier()["passed"]
+    (tmp_path / "status.json").write_text('{"status":"running"}')
+    assert not ale.math_barrier()["passed"]
+
+
+def test_math_barrier_waits_for_added_no_memory_control(monkeypatch, tmp_path):
+    monkeypatch.setattr(ale, "OUT", tmp_path)
+    monkeypatch.setattr(ale.math_run, "OUT", tmp_path)
+    monkeypatch.setattr(ale.math_run, "cells", list)
+    monkeypatch.setattr(ale.math_run, "complete_cell", lambda *_: False)
+    (tmp_path / "status.json").write_text('{"status":"complete"}')
+    (tmp_path / "additional_math_prerequisites.json").write_text('["/control"]')
+    assert ale.math_barrier()["additional_missing_cells"] == ["/control"]
     assert not ale.math_barrier()["passed"]
     monkeypatch.setattr(ale.math_run, "complete_cell", lambda *_: True)
     assert ale.math_barrier()["passed"]

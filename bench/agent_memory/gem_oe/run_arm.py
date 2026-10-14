@@ -820,16 +820,16 @@ def main(argv: list[str] | None = None) -> int:
             else resolve_task(args.dsn, args.task, args.raw))
     cfg = build_config(config_cls, args)
     if args.trajectory_store:
-        if args.arm != "trimem" or args.task_source != "trimem":
-            raise ValueError("--trajectory-store requires --arm trimem --task-source trimem")
+        if args.arm not in {"trimem", "nocontext"} or args.task_source != "trimem":
+            raise ValueError("--trajectory-store requires --arm trimem/nocontext --task-source trimem")
         if min(args.trajectory_memory_tokens, args.trajectory_prompt_tokens) <= 0:
             raise ValueError("trajectory prompt and memory token budgets must be positive")
         from bench.agent_memory.gem_oe.trajectory_prompt import install
 
         install()
         args.inject_as = "code"
-        cfg.prompt.num_top_programs = 1
-        cfg.prompt.num_diverse_programs = 4
+        cfg.prompt.num_top_programs = 0 if args.arm == "nocontext" else 1
+        cfg.prompt.num_diverse_programs = 0 if args.arm == "nocontext" else 4
         cfg.prompt.template_dir = str(Path(__file__).parent / "prompts" / "trajectory")
         # task.spec is the original task system message, retained verbatim.
         cfg.prompt.system_message = task["spec"]
@@ -908,13 +908,13 @@ def main(argv: list[str] | None = None) -> int:
         "timing_schema": "gem_plan_timing_v1" if args.physical_plan else None,
         "injection_policy": args.injection_policy,
         "trajectory_store": args.trajectory_store,
-        "trajectory_plan": args.trajectory_plan if args.trajectory_store else None,
+        "trajectory_plan": args.trajectory_plan if args.trajectory_store and args.arm != "nocontext" else None,
         "trajectory_memory_tokens": args.trajectory_memory_tokens if args.trajectory_store else None,
         "trajectory_prompt_tokens": args.trajectory_prompt_tokens if args.trajectory_store else None,
         "trajectory_total_token_budget": args.trajectory_total_token_budget if args.trajectory_store else None,
         "trajectory_context_contract": "trajectory-context-v4-candidate-code" if args.trajectory_store else None,
-        "trajectory_top_programs": 1 if args.trajectory_store else None,
-        "trajectory_inspiration_target": 4 if args.trajectory_store else None,
+        "trajectory_top_programs": cfg.prompt.num_top_programs if args.trajectory_store else None,
+        "trajectory_inspiration_target": cfg.prompt.num_diverse_programs if args.trajectory_store else None,
         "inject_as": args.inject_as,
         "injection_render_contract": "external_program_code_is_changes_description"
         if args.inject_as == "changes"
@@ -1002,7 +1002,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     controller.database = memory_db
     controller.evaluator.database = memory_db
-    if args.trajectory_store:
+    if args.trajectory_store and args.arm == "trimem":
         retriever.database = memory_db
     if args.arm == "trimem-adaptive":
         from bench.agent_memory.gem_oe.trimem_adaptive import install_observer

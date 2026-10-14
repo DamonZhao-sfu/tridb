@@ -141,6 +141,29 @@ def test_top_budget_skips_whole_program_and_records_it(monkeypatch):
     assert s.context_receipt["truncated_records"] == 0
 
 
+def test_no_memory_keeps_current_prompt_but_excludes_all_reference_sources():
+    s = sampler(
+        own_programs=[program("past", 1, 1), program("parent", 2, 2)],
+        parent_id="parent",
+        iteration=3,
+    )
+    s.config.num_top_programs = 0
+    s.config.num_diverse_programs = 0
+    result = s.build_prompt(
+        current_program="parent_only = 42",
+        program_metrics={"combined_score": 2, "error": "current diagnostic"},
+        inspirations=[program("external", 0, 10)],
+        language="python",
+    )
+    assert result["system"] == s.config.system_message
+    assert "parent_only = 42" in result["user"]
+    assert "current diagnostic" in result["user"]
+    assert "candidate_past" not in result["user"]
+    assert "candidate_external" not in result["user"]
+    assert "### Attempt" not in result["user"]
+    assert "### Program 1" not in result["user"]
+
+
 def test_worker_hook_installs_sampler_and_restores_it(monkeypatch):
     from types import SimpleNamespace
 

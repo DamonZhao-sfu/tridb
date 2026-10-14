@@ -41,9 +41,12 @@ def math_barrier():
         if not math_run.complete_cell(math_run.STAGE50 / name, 50)
     ]
     state = base.read(math_run.OUT / "status.json", {})
+    extra = base.read(OUT / "additional_math_prerequisites.json", [])
+    extra_missing = [path for path in extra if not math_run.complete_cell(Path(path), 50)]
     return {
-        "passed": not missing and state.get("status") == "complete",
+        "passed": not missing and not extra_missing and state.get("status") == "complete",
         "missing_cells": missing,
+        "additional_missing_cells": extra_missing,
         "math_status": state.get("status", "unavailable"),
         "required": "all16 Math cells complete50 and Math supervisor complete",
     }

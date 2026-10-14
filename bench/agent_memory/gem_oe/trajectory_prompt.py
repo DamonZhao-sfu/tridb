@@ -250,6 +250,11 @@ class TrajectoryPromptSampler(PromptSampler):
         kwargs["previous_programs"] = list(kwargs.get("previous_programs", []))[-3:]
         kwargs["top_programs"] = list(kwargs.get("top_programs", []))
         kwargs["inspirations"] = list(kwargs.get("inspirations", []))
+        if self.config.num_top_programs == 0 and self.config.num_diverse_programs == 0:
+            # Strict no-memory control: preserve current parent and its feedback,
+            # but never reintroduce own history from the database snapshot.
+            for section in ("previous_programs", "top_programs", "inspirations"):
+                kwargs[section] = []
         removed = []
         # Reuse the same stochastic template choice during budget reductions.
         random_state = random.getstate()

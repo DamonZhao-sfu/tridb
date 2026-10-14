@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.13.10] - 2026-10-13
+### Features
+- Permit the strict no-reference control to use the latest trajectory prompt, original task
+  system message, current evaluation feedback and full-input token accounting.
+- Add a convex_13 no-memory rerun coordinator with separate 20/50 stages and ten-round checkpoints.
+- Allow ALE scheduling to wait for explicitly added Math controls.
+### Design Rationale
+- Match current generation settings without accidentally injecting own-run history or retrieved
+  programs into a no-memory arm. Preserve historical baseline measurements separately.
+### Notes & Caveats
+- No-memory retains the current parent program and its feedback. All three reference sections
+  are empty. The main sixteen-cell Math matrix remains independently scheduled.
+
 ## [0.13.9] - 2026-10-13
 ### Features
 - Queue AHC008, AHC011, AHC024, AHC025 and AHC026 behind completion of all Math
