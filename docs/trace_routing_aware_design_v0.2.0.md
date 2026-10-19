@@ -194,3 +194,13 @@ flowchart TD
 4. 现有路由器实际使用的 z(q) 是什么。
 5. SemFilter 的 judge 模型、调用粒度、并发度，以及结果是否按（题目，候选 session）缓存。
 6. "no memory"与"不加 SemFilter"是否作为路由的合法动作。ALFWorld 上记忆把输入 token 从 6.7 万降到 4.2 万，说明"要不要检索"本身也值得路由。
+
+## 9. 附录（2026-10-19）：代码现状与实现 prompt
+
+**代码现状与草稿不一致。** 本仓库的 `trimem/optimizer/search.py` 是 Math/ALE 实验用的多目标 BO：目标只有两个，即质量与 −总 LLM token，代码注释写明 v1 有意不含延迟。采集函数是 qLogNEHVI，每次提一个配置。候选来自对空间的分层随机抽样，每次 256 个。初始化按计划或者均匀随机。本仓库中没有局部搜索、交叉或 LLM analyzer 的实现。原草稿描述的三目标和四通道，要么只存在于环境类实验的代码里，要么尚未实现，需要用户确认。确认之前，论文不应声称四通道已经运行。
+
+**实现 prompt** 位于 `docs/trace_impl_prompts_v0.1.0/`，按顺序执行：
+
+1. `0_shared_contract_and_features.md`：数据契约、离线与在线共用的特征探针、只跑检索的执行器。
+2. `1_offline_profiling_and_router.md`：阶段 A 回放分析（不用 GPU，做完先停）、阶段 B 为路由而探索、阶段 C 路由器训练与冻结。
+3. `2_online_deployment.md`：加载产物、逐题路由、执行与回执、接入实验驱动。
