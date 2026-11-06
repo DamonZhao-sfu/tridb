@@ -146,6 +146,7 @@ def query(plan, track):
         "P1",
         "P2",
         "SemRankOnly",
+        "VGR+SemRank",
         "P1+Rank",
         "P2+Rank",
         "SemJoin/lowered",
@@ -153,7 +154,7 @@ def query(plan, track):
         raise ValueError("unsupported trajectory plan")
     if track not in ("emb", "intent_emb"):
         raise ValueError("unsupported vector track")
-    if plan.endswith("+Rank"):
+    if plan.endswith("+Rank") or plan == "VGR+SemRank":
         rows = query(plan.split("+")[0], track)
         return f"""SELECT candidate.*,trimem.sem_score(%(score_predicate)s,{judge_input("candidate.evidence")}) AS sem_score
 FROM ({rows}) candidate LIMIT 64"""
