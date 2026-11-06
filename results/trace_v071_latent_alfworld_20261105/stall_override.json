@@ -1,0 +1,1 @@
+{"force_rounds": ["round_042"], "epsilon": 0.001, "note": "user 2026-11-05 ~19:00: HV gain <= 0.001 counts as stalled; the next round after round_038 is a forced exploration round. Read by trimem/experiments/trace_v071_stall_override.py."}
